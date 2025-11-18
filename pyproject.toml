@@ -1,14 +1,20 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "odysseus"
-version = "0.1.0"
-description = "Lightweight CLI agent with pluggable tools"
-authors = [{name = "Odysseus"}]
-readme = "README.md"
+version = "0.2.0"
+description = "Local-first autonomous agent (Lindy-like) with planner, memory, and skills."
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn>=0.30",
+  "httpx>=0.27",
+  "pydantic>=2.8",
+  "sqlmodel>=0.0.22",
+  "python-dotenv>=1.0",
+]
 
-[project.scripts]
-odysseus = "odysseus.cli:main"
-
-[tool.ruff]
-line-length = 100
+[project.optional-dependencies]
+dev = ["pytest>=8.3", "ruff>=0.6", "black>=24.10", "mypy>=1.13"]
