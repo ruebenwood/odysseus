@@ -33,7 +33,10 @@ A FastAPI wrapper exposes the planner and available tools. Start it with uvicorn
 uvicorn odysseus.server:app --host ${ODYSSEUS_API_HOST:-127.0.0.1} --port ${ODYSSEUS_API_PORT:-8787}
 ```
 
-Authenticate requests with the `Bearer ${ODYSSEUS_CONSOLE_PASSWORD}` token. The LLM bridge is read from `ODYSSEUS_CODEX_URL` and is expected to accept `{ messages, tools }` JSON and respond with `{ text }`.
+Authenticate requests with the `Bearer ${ODYSSEUS_CONSOLE_PASSWORD}` token. The LLM backend is selected via `ODYSSEUS_LLM`:
+
+- `bridge` (default) posts to `ODYSSEUS_CODEX_URL`, expecting `{ messages, tools }` JSON and `{ text }` in response.
+- `openai` calls the chat completions API using `OPENAI_API_KEY`, `OPENAI_BASE_URL`, and `OPENAI_MODEL`, while keeping the same text contract for the planner.
 
 ## Web console
 
@@ -50,7 +53,9 @@ Open http://localhost:3000/login, enter `ODYSSEUS_CONSOLE_PASSWORD`, and you wil
 
 `.env.example` documents all supported settings, including:
 
-- `ODYSSEUS_CODEX_URL` — HTTP endpoint that executes Codex/LLM prompts.
+- `ODYSSEUS_LLM` — choose `bridge` (default) or `openai`.
+- `ODYSSEUS_CODEX_URL` — HTTP endpoint that executes Codex/LLM prompts when using the bridge.
+- `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL` — settings for the OpenAI backend.
 - `ODYSSEUS_CONSOLE_PASSWORD` — password for the console and API Bearer token.
 - `ODYSSEUS_DB` — SQLite path for memory, todos, and automations.
 - `ODYSSEUS_MAX_STEPS` / `ODYSSEUS_TEMPERATURE` — planner behavior tuning.

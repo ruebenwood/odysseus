@@ -1,10 +1,11 @@
 from __future__ import annotations
 from typing import List, Dict, Any
-import json, asyncio, httpx
+import json, asyncio
 from .types import Message, Step, RunRequest, RunResult
 from .config import settings
 from .memory import recall, memorize
 from .tools import get_tool, list_tools
+from . import llm
 
 SYSTEM_HINT = (
 "Role: helpful executive assistant.\n"
@@ -19,11 +20,8 @@ def _format_context(goal: str, messages: List[Message]) -> List[Dict[str, str]]:
     return [sys, user] + rest
 
 async def _ask_llm(context: List[Dict[str, str]], tools: List[Dict[str, Any]]) -> str:
-    # why: keep bridge-agnostic; expect text with JSON action when needed
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(settings.codex_url, json={"messages": context, "tools": tools})
-        resp.raise_for_status()
-        return resp.json().get("text", "")
+    # Delegates to either the bridge or OpenAI backend, returning a single text blob.
+    return await llm.ask(context, tools)
 
 def _parse_llm(text: str) -> Step:
     # Convention: lines starting with THOUGHT:, ACTION:{"name":..}, OBSERVATION:, DONE:
