@@ -1,0 +1,14 @@
+[project]
+name = "odysseus"
+version = "0.1.0"
+description = "Lightweight CLI agent with pluggable tools"
+authors = [{name = "Odysseus"}]
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+odysseus = "odysseus.cli:main"
+
+[tool.ruff]
+line-length = 100
