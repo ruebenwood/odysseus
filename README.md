@@ -67,3 +67,13 @@ Run the lightweight smoke test after installing dev dependencies:
 ```bash
 pytest
 ```
+
+Frontend/unit tests use Vitest with JSDOM. Useful commands:
+
+```bash
+npm test           # watch mode
+npm run test:run   # one-off
+npm run test:ci    # coverage
+```
+
+Note: flags like `--runInBand` are Jest-only; use the scripts above for Vitest.
