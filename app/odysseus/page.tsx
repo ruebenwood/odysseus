@@ -1,195 +1,143 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
+import { runOdysseusTask } from "@/lib/odysseus";
+import type { OdysseusMode } from "@/lib/odysseus";
 
-const MODES = [
-  { value: "build", label: "Build – create features/apps" },
-  { value: "design", label: "Design – UI/UX focus" },
-  { value: "refactor", label: "Refactor – clean up code" },
-  { value: "analyze", label: "Analyze – understand & report" },
-  { value: "deploy", label: "Deploy – configs & pipelines" },
-  { value: "api", label: "API – backend endpoints" },
-  { value: "mobile", label: "Mobile – React Native/Expo" },
-] as const;
+type RunState = {
+  result?: string;
+  error?: string;
+};
 
-type ModeValue = (typeof MODES)[number]["value"];
+const PRESETS: Array<{
+  id: string;
+  title: string;
+  description: string;
+  mode: OdysseusMode;
+  task: string;
+}> = [
+  {
+    id: "expo",
+    title: "New Expo app",
+    description:
+      "Scaffold an Expo + React Native app with bottom tabs and basic screens.",
+    mode: "mobile",
+    task:
+      "Create an Expo app with a bottom tab navigator: Home, Activity, Profile. Home should show a feed card list; Activity shows recent events; Profile shows editable user info.",
+  },
+  {
+    id: "monorepo",
+    title: "New web+mobile monorepo",
+    description:
+      "Set up Next.js (web) + Expo (mobile) in a single monorepo with shared packages.",
+    mode: "build",
+    task:
+      "Set up a monorepo with apps/web (Next.js) and apps/mobile (Expo). Share a UI component library in packages/ui and a shared types package in packages/types. Scaffold a simple home screen/page in both apps that uses the shared UI.",
+  },
+];
 
-export default function OdysseusConsolePage() {
-  const [mode, setMode] = useState<ModeValue>("build");
-  const [task, setTask] = useState("");
-  const [output, setOutput] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+export default function OdysseusPage() {
+  const [isPending, startTransition] = useTransition();
+  const [state, setState] = useState<RunState>({});
+  const [task, setTask] = useState<string>("");
+  const [mode, setMode] = useState<OdysseusMode>("build");
 
-  async function handleRun() {
-    if (!task.trim()) {
-      setErrorMsg("Describe what you want Odysseus.ai to do.");
-      return;
-    }
-    setErrorMsg(null);
-    setIsLoading(true);
-    setOutput("");
-
-    try {
-      const res = await fetch("/api/odysseus", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ task, mode }),
-      });
-
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || "Request failed.");
+  async function run(taskText: string, modeVal: OdysseusMode) {
+    setState({});
+    startTransition(async () => {
+      try {
+        const out = await runOdysseusTask(taskText, { mode: modeVal });
+        setState({ result: out });
+      } catch (err: any) {
+        // Why: surface server action errors cleanly for debugging UX.
+        setState({ error: err?.message ?? "Unknown error" });
       }
-
-      const data = await res.json();
-      setOutput(data.output || "");
-    } catch (err: any) {
-      setErrorMsg(err?.message || "Something went wrong.");
-    } finally {
-      setIsLoading(false);
-    }
-  }
-
-  async function handleLogout() {
-    try {
-      await fetch("/api/auth/logout", { method: "POST" });
-      window.location.href = "/login";
-    } catch {
-      // ignore
-    }
+    });
   }
 
   return (
-    <div className="min-h-screen bg-black text-neutral-100 flex items-center justify-center px-4 py-10">
-      <div className="w-full max-w-5xl rounded-2xl border border-neutral-800 bg-gradient-to-br from-neutral-950 via-black to-neutral-900 shadow-2xl p-6 md:p-8">
-        <header className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
-          <div>
-            <h1 className="text-2xl md:text-3xl font-semibold tracking-tight">
-              Odysseus<span className="text-blue-500">.ai</span>
-            </h1>
-            <p className="text-sm text-neutral-400 mt-1">
-              Autonomous software architect. Pick a mode, describe the mission,
-              and let it work against your Codex-attached repo.
-            </p>
-          </div>
-          <div className="flex flex-col items-end gap-2">
-            <button
-              type="button"
-              onClick={handleLogout}
-              className="text-xs text-neutral-400 hover:text-neutral-200 underline underline-offset-4"
+    <div className="mx-auto max-w-5xl p-6 space-y-8">
+      <header className="space-y-1">
+        <h1 className="text-2xl font-semibold tracking-tight">
+          Odysseus Presets
+        </h1>
+        <p className="text-sm text-gray-500">
+          One-click tasks for Lindy-style repo edits with Next.js + Expo.
+        </p>
+      </header>
+
+      {/* Presets */}
+      <section className="grid gap-4 md:grid-cols-2">
+        {PRESETS.map((p) => (
+          <button
+            key={p.id}
+            onClick={() => run(p.task, p.mode)}
+            disabled={isPending}
+            className="rounded-2xl border p-4 text-left shadow-sm transition hover:shadow md:p-5 disabled:opacity-60"
+          >
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-medium">{p.title}</h2>
+              <span className="rounded-full border px-2 py-0.5 text-xs">
+                {p.mode.toUpperCase()}
+              </span>
+            </div>
+            <p className="mt-2 text-sm text-gray-600">{p.description}</p>
+            <pre className="mt-3 line-clamp-3 whitespace-pre-wrap rounded-lg bg-gray-50 p-3 text-xs text-gray-700">
+              {p.task}
+            </pre>
+          </button>
+        ))}
+      </section>
+
+      {/* Freeform runner */}
+      <section className="rounded-2xl border p-4 shadow-sm md:p-5">
+        <h3 className="text-base font-medium">Custom task</h3>
+        <div className="mt-3 grid gap-3">
+          <textarea
+            value={task}
+            onChange={(e) => setTask(e.target.value)}
+            placeholder='e.g. "Create a Next.js dashboard with sidebar navigation, filters, and a metrics grid."'
+            className="min-h-[120px] w-full rounded-lg border p-3 text-sm"
+          />
+          <div className="flex items-center gap-3">
+            <label className="text-sm text-gray-600">Mode</label>
+            <select
+              value={mode}
+              onChange={(e) => setMode(e.target.value as OdysseusMode)}
+              className="rounded-md border px-2 py-1 text-sm"
             >
-              Logout
-            </button>
-            <div className="flex flex-wrap gap-1 text-xs text-neutral-500">
-              {MODES.map((m) => (
-                <span
-                  key={m.value}
-                  className={`px-2 py-0.5 rounded-full border ${
-                    mode === m.value
-                      ? "border-blue-500 text-blue-300 bg-blue-500/10"
-                      : "border-neutral-700"
-                  }`}
-                >
-                  {m.value}
-                </span>
-              ))}
-            </div>
-          </div>
-        </header>
-
-        <div className="grid gap-6 md:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
-          {/* Left: controls */}
-          <section className="space-y-4">
-            <div className="space-y-2">
-              <label
-                htmlFor="mode"
-                className="text-xs font-medium text-neutral-300"
-              >
-                Mode
-              </label>
-              <select
-                id="mode"
-                value={mode}
-                onChange={(e) => setMode(e.target.value as ModeValue)}
-                className="w-full rounded-xl border border-neutral-700 bg-neutral-950/70 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-600"
-              >
-                {MODES.map((m) => (
-                  <option key={m.value} value={m.value}>
-                    {m.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="space-y-2">
-              <label
-                htmlFor="task"
-                className="text-xs font-medium text-neutral-300"
-              >
-                Task
-              </label>
-              <textarea
-                id="task"
-                value={task}
-                onChange={(e) => setTask(e.target.value)}
-                rows={8}
-                placeholder='Example: "Create a responsive dashboard with filters and charts."'
-                className="w-full rounded-xl border border-neutral-700 bg-neutral-950/70 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-600 resize-none"
-              />
-            </div>
-
-            {errorMsg && (
-              <p className="text-xs text-red-500 bg-red-500/10 border border-red-600/50 rounded-lg px-3 py-2">
-                {errorMsg}
-              </p>
-            )}
-
+              <option value="build">build</option>
+              <option value="design">design</option>
+              <option value="refactor">refactor</option>
+              <option value="analyze">analyze</option>
+              <option value="deploy">deploy</option>
+              <option value="api">api</option>
+              <option value="mobile">mobile</option>
+            </select>
             <button
-              type="button"
-              onClick={handleRun}
-              disabled={isLoading}
-              className="inline-flex items-center justify-center rounded-xl bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800 px-4 py-2.5 text-sm font-medium transition-colors w-full md:w-auto"
+              onClick={() => run(task, mode)}
+              disabled={isPending || !task.trim()}
+              className="ml-auto rounded-lg bg-black px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
             >
-              {isLoading ? "Sending to Odysseus.ai..." : "Send to Odysseus.ai"}
+              {isPending ? "Running…" : "Run task"}
             </button>
-
-            <p className="text-[11px] text-neutral-500">
-              Odysseus.ai runs against the repo that Codex is attached to. Make
-              sure your Codex configuration points at the correct project.
-            </p>
-          </section>
-
-          {/* Right: output */}
-          <section className="flex flex-col h-full">
-            <div className="flex items-center justify-between mb-2">
-              <h2 className="text-sm font-medium text-neutral-200">
-                Output / Log
-              </h2>
-              <button
-                type="button"
-                onClick={() => setOutput("")}
-                className="text-[11px] text-neutral-500 hover:text-neutral-300"
-              >
-                Clear
-              </button>
-            </div>
-            <div className="flex-1 min-h-[220px] rounded-xl border border-neutral-700 bg-neutral-950/70 p-3 text-xs font-mono text-neutral-300 overflow-auto whitespace-pre-wrap">
-              {isLoading && !output && (
-                <span className="text-neutral-500">
-                  Odysseus.ai is working...
-                </span>
-              )}
-              {!isLoading && !output && (
-                <span className="text-neutral-600">
-                  No output yet. Run a task to see what Odysseus.ai does.
-                </span>
-              )}
-              {output && <span>{output}</span>}
-            </div>
-          </section>
+          </div>
         </div>
-      </div>
+      </section>
+
+      {/* Output */}
+      <section className="rounded-2xl border p-4 shadow-sm md:p-5">
+        <h3 className="text-base font-medium">Output</h3>
+        {state.error ? (
+          <p className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+            {state.error}
+          </p>
+        ) : (
+          <pre className="mt-3 max-h-[520px] overflow-auto whitespace-pre-wrap rounded-lg bg-gray-50 p-3 text-sm">
+            {state.result ?? "No output yet. Run a preset or custom task."}
+          </pre>
+        )}
+      </section>
     </div>
   );
 }
