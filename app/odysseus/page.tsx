@@ -70,6 +70,16 @@ const BUILTIN_PRESETS: UIPreset[] = [
       "Create an Expo Router app integrated with Supabase auth using magic link and OAuth. Configure deep links and linking so the magic-link flow returns to the app. Include (a) app.config.ts with scheme and link prefixes, (b) auth screens (/login, /callback), (c) session persistence, (d) protected routes (/(tabs)/home, /(tabs)/activity, /(tabs)/profile), and (e) a Supabase client in src/lib/supabase.ts using EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_ANON_KEY.",
     builtin: true,
   },
+  {
+    id: "next_supabase_guard",
+    title: "Next.js + Supabase (client + route guard)",
+    description:
+      "Supabase client for web, auth pages, middleware to protect /app routes, and session utilities.",
+    mode: "build",
+    task:
+      "In a Next.js app, add Supabase auth with a client helper, server-side session utilities, and middleware to protect /app routes. Include pages: /login (email magic link & OAuth), /app (protected), and an API route to get current user. Use NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY.",
+    builtin: true,
+  },
 ];
 
 const LS_PRESETS_KEY = "odysseus.presets";
@@ -308,6 +318,44 @@ export default function ${name[0].toUpperCase() + name.slice(1)}() {
   return routerFiles;
 }
 
+function makeWebSupabaseScaffolds(): ScaffoldMap {
+  return {
+    "apps/web/.env.local.example": `NEXT_PUBLIC_SUPABASE_URL=https://YOUR-PROJECT.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=YOUR-ANON-KEY`,
+    "apps/web/lib/supabaseClient.ts": `import { createBrowserClient } from '@supabase/ssr';
+export const supabaseBrowser = () =>
+  createBrowserClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  );`,
+    "apps/web/middleware.ts": `import { NextResponse } from 'next/server';
+import type { NextRequest } from 'next/server';
+
+export function middleware(req: NextRequest) {
+  const session = req.cookies.get('sb-session')?.value;
+  const isProtected = req.nextUrl.pathname.startsWith('/app');
+  if (isProtected && !session) {
+    const url = req.nextUrl.clone();
+    url.pathname = '/login';
+    url.searchParams.set('redirect', req.nextUrl.pathname);
+    return NextResponse.redirect(url);
+  }
+  return NextResponse.next();
+}
+
+export const config = { matcher: ['/app/:path*'] };`,
+  };
+}
+
+function scaffoldWebExtraInstructions(map: ScaffoldMap): string {
+  return [
+    "Additionally, create these Next.js web files with exact contents:",
+    ...Object.entries(map).map(
+      ([p, c]) => `Create or overwrite: \`${p}\`\n\n\`\`\`\n${c}\n\`\`\``
+    ),
+  ].join("\n\n");
+}
+
 function scaffoldExtraInstructions(files: ScaffoldMap): string {
   const parts = Object.entries(files).map(
     ([path, content]) =>
@@ -318,6 +366,149 @@ function scaffoldExtraInstructions(files: ScaffoldMap): string {
     parts.join("\n\n"),
     "Ensure app builds and deep links are wired for magic link callback.",
   ].join("\n\n");
+}
+
+function VercelPanel() {
+  const [token, setToken] = useState<string>("");
+  const [name, setName] = useState<string>("odysseus-web");
+  const [teamId, setTeamId] = useState<string>("");
+  const [projectIdOrName, setProjectIdOrName] = useState<string>("");
+
+  const [envsText, setEnvsText] = useState<string>(`NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+EXPO_PUBLIC_SUPABASE_URL=
+EXPO_PUBLIC_SUPABASE_ANON_KEY=
+`);
+
+  useEffect(() => {
+    try {
+      const t = localStorage.getItem("odysseus.vercel.token") || "";
+      if (t) setToken(t);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  function saveToken(next: string) {
+    setToken(next);
+    try {
+      localStorage.setItem("odysseus.vercel.token", next);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function call(path: string, payload: any) {
+    const res = await fetch(path, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { "x-vercel-token": token } : {}),
+      },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data?.error || "Request failed");
+    return data;
+  }
+
+  async function createProject() {
+    const data = await call("/api/vercel/projects", {
+      name,
+      framework: "nextjs",
+      teamId: teamId || undefined,
+    });
+    alert(`Project created: ${data?.id || data?.name}`);
+    setProjectIdOrName(data?.id || data?.name || name);
+  }
+
+  async function setEnvs() {
+    const lines = envsText
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean);
+    const envs = lines.map((l) => {
+      const [key, ...rest] = l.split("=");
+      return { key, value: rest.join("=") };
+    });
+    const target = ["production", "preview", "development"] as const;
+    const data = await call("/api/vercel/env", {
+      projectIdOrName: projectIdOrName || name,
+      envs: envs.map((e: any) => ({ ...e, target })),
+      teamId: teamId || undefined,
+    });
+    alert("Env results:\n" + JSON.stringify(data.results, null, 2));
+  }
+
+  async function triggerDeploy() {
+    const data = await call("/api/vercel/deploy", {
+      name,
+      projectId: projectIdOrName || undefined,
+      teamId: teamId || undefined,
+    });
+    alert("Deployment started:\n" + JSON.stringify(data, null, 2));
+  }
+
+  return (
+    <section className="rounded-2xl border p-4 shadow-sm md:p-5">
+      <div className="mb-2 flex items-center justify-between">
+        <h3 className="text-base font-medium">Vercel</h3>
+      </div>
+      <div className="grid gap-3">
+        <label className="text-sm">Vercel Token</label>
+        <input
+          type="password"
+          className="rounded-md border p-2 text-sm"
+          value={token}
+          onChange={(e) => saveToken(e.target.value)}
+          placeholder="Import from env or paste here"
+        />
+        <label className="text-sm">Team ID (optional)</label>
+        <input
+          className="rounded-md border p-2 text-sm"
+          value={teamId}
+          onChange={(e) => setTeamId(e.target.value)}
+          placeholder="team_XXXXXXXX (optional)"
+        />
+        <label className="text-sm">Project Name</label>
+        <input
+          className="rounded-md border p-2 text-sm"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="odysseus-web"
+        />
+        <label className="text-sm">Project ID/Name (for envs/deploy)</label>
+        <input
+          className="rounded-md border p-2 text-sm"
+          value={projectIdOrName}
+          onChange={(e) => setProjectIdOrName(e.target.value)}
+          placeholder="auto-filled after create"
+        />
+        <div className="flex gap-2">
+          <button onClick={createProject} className="rounded-md border px-3 py-1.5 text-sm">
+            Create project
+          </button>
+          <button onClick={triggerDeploy} className="rounded-md border px-3 py-1.5 text-sm">
+            Trigger deploy
+          </button>
+        </div>
+
+        <label className="mt-2 text-sm">Env vars (KEY=VALUE per line)</label>
+        <textarea
+          className="min-h-[120px] rounded-md border p-2 text-sm"
+          value={envsText}
+          onChange={(e) => setEnvsText(e.target.value)}
+        />
+        <button onClick={setEnvs} className="mt-1 rounded-md border px-3 py-1.5 text-sm">
+          Set env vars
+        </button>
+
+        <p className="text-xs text-gray-500">
+          Token is passed via header to API routes; server falls back to VERCEL_TOKEN env if header is absent.
+        </p>
+      </div>
+    </section>
+  );
 }
 
 export default function OdysseusPage() {
@@ -381,7 +572,9 @@ export default function OdysseusPage() {
   );
 
   const isSupabasePreset = (id?: string | null) =>
-    id === "expo_supabase_auth" || id === "expo_router_supabase_magiclink";
+    id === "expo_supabase_auth" ||
+    id === "expo_router_supabase_magiclink" ||
+    id === "next_supabase_guard";
 
   async function runWithFallback(
     taskText: string,
@@ -392,23 +585,25 @@ export default function OdysseusPage() {
     const trimmed = taskText.trim();
     if (!trimmed) return;
 
-    let supaScaffolds: ScaffoldMap | null = null;
-    if (isSupabasePreset(presetId)) {
-      supaScaffolds = makeSupabaseScaffolds(
+    let selectedScaffolds: ScaffoldMap | null = null;
+    if (presetId === "next_supabase_guard") {
+      selectedScaffolds = makeWebSupabaseScaffolds();
+    } else if (isSupabasePreset(presetId)) {
+      selectedScaffolds = makeSupabaseScaffolds(
         presetId === "expo_router_supabase_magiclink" ? "router" : "tabs"
       );
-      setScaffolds(supaScaffolds);
-      setLastPresetId(presetId ?? null);
-    } else {
-      setScaffolds(null);
-      setLastPresetId(presetId ?? null);
     }
 
+    setScaffolds(selectedScaffolds);
+    setLastPresetId(presetId ?? null);
+
     let effectiveExtra = (extraInstructions ?? "").trim();
-    if (supaScaffolds && !dryRun) {
-      effectiveExtra = [effectiveExtra, scaffoldExtraInstructions(supaScaffolds)]
-        .filter(Boolean)
-        .join("\n\n");
+    if (selectedScaffolds && !dryRun) {
+      const scaffoldNotes =
+        presetId === "next_supabase_guard"
+          ? scaffoldWebExtraInstructions(selectedScaffolds)
+          : scaffoldExtraInstructions(selectedScaffolds);
+      effectiveExtra = [effectiveExtra, scaffoldNotes].filter(Boolean).join("\n\n");
     }
 
     setState({ info: dryRun ? "Dry-run preview…" : "Running…" });
@@ -424,7 +619,7 @@ export default function OdysseusPage() {
         "––– Prompt that would be sent –––",
         prompt,
         "",
-        supaScaffolds ? "––– Scaffolds (download below or let Odysseus write them) –––" : "",
+        selectedScaffolds ? "––– Scaffolds (download below or let Odysseus write them) –––" : "",
       ].join("\n");
       setState({ result: preview });
       capture("odysseus_dry_run", {
@@ -489,6 +684,23 @@ export default function OdysseusPage() {
     startTransition(() => {
       void runWithFallback(taskText, modeVal, extraInstructions, presetId);
     });
+  }
+
+  function writeScaffoldsToRepo(scaffoldMap: ScaffoldMap) {
+    const taskLines = Object.keys(scaffoldMap).map(
+      (path) => `- Create or overwrite: ${path}`
+    );
+    const task = [
+      "Create ONLY the following files in the repo (no other changes):",
+      ...taskLines,
+    ].join("\n");
+
+    const extras =
+      lastPresetId === "next_supabase_guard"
+        ? scaffoldWebExtraInstructions(scaffoldMap)
+        : scaffoldExtraInstructions(scaffoldMap);
+
+    run(task, "build", extras, "scaffolds_write_now");
   }
 
   async function copy(text?: string) {
@@ -765,16 +977,29 @@ NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}</pre>
         <section className="rounded-2xl border p-4 shadow-sm md:p-5">
           <div className="mb-2 flex items-center justify-between">
             <h3 className="text-base font-medium">
-              Scaffolds for {lastPresetId === "expo_router_supabase_magiclink" ? "Expo Router + Supabase" : "Expo + Supabase"}
+              Scaffolds for
+              {" "}
+              {lastPresetId === "expo_router_supabase_magiclink"
+                ? "Expo Router + Supabase"
+                : lastPresetId === "next_supabase_guard"
+                ? "Next.js + Supabase (web)"
+                : "Expo + Supabase"}
             </h3>
             <div className="flex items-center gap-2">
               <button onClick={downloadAllScaffolds} className="rounded-md border px-2 py-1 text-xs">
                 Download all
               </button>
+              <button
+                onClick={() => scaffolds && writeScaffoldsToRepo(scaffolds)}
+                className="rounded-md bg-black px-2 py-1 text-xs text-white"
+              >
+                Write scaffolds to repo now
+              </button>
             </div>
           </div>
           <p className="text-xs text-gray-600">
-            Use these files directly or let Odysseus create them (we auto-inject in non–dry-run).
+            Use these files directly or let Odysseus create them (we auto-inject in non–dry-run). The button above sends a
+            focused build task that only writes these files.
           </p>
           <ul className="mt-3 space-y-2">
             {Object.entries(scaffolds).map(([path, content]) => (
@@ -795,6 +1020,8 @@ NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}</pre>
           </ul>
         </section>
       )}
+
+      <VercelPanel />
 
       <section className="rounded-2xl border p-4 shadow-sm md:p-5">
         <div className="mb-2 flex items-center justify-between">
