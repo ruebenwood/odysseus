@@ -1,97 +1,45 @@
-// Minimal client-side telemetry wrapper with PostHog (optional)
-"use client";
-
 export const ENV_POSTHOG_KEY =
-  process.env.NEXT_PUBLIC_POSTHOG_KEY || undefined;
-export const ENV_POSTHOG_HOST =
-  process.env.NEXT_PUBLIC_POSTHOG_HOST || "https://us.i.posthog.com";
+  typeof process !== "undefined" ? process.env.NEXT_PUBLIC_POSTHOG_KEY : undefined;
 
-let posthogLoaded = false;
-let posthog: any = null;
+type Event = { ts: number; event: string; props?: Record<string, any> };
+let buffer: Event[] = [];
+let ph: any = null;
 
-type TelemetryConfig = {
-  enabled: boolean;
-  key?: string;
-  apiHost?: string;
-};
-
-type TelemetryEvent = {
-  ts: number;
-  event: string;
-  props?: Record<string, any>;
-};
-
-const MAX_EVENTS = 50;
-const recentEvents: TelemetryEvent[] = [];
-const listeners = new Set<(e: TelemetryEvent) => void>();
-
-function pushEvent(e: TelemetryEvent) {
-  recentEvents.push(e);
-  if (recentEvents.length > MAX_EVENTS) recentEvents.shift();
-  // Why: live-update UI even if PostHog disabled/missing key.
-  listeners.forEach((cb) => {
-    try {
-      cb(e);
-    } catch {
-      /* no-op */
-    }
-  });
-}
-
-export function subscribeToEvents(cb: (e: TelemetryEvent) => void) {
-  listeners.add(cb);
-  return () => listeners.delete(cb);
-}
-
-export function getRecentEvents(): TelemetryEvent[] {
-  return [...recentEvents];
-}
-
-export function initTelemetry(config: TelemetryConfig) {
+export function initTelemetry(opts: { enabled: boolean }) {
   if (typeof window === "undefined") return;
-  if (!config.enabled) return;
-  if (posthogLoaded) return;
+  if (!opts.enabled) return;
+  if (!ENV_POSTHOG_KEY) return;
 
-  const key = config.key ?? ENV_POSTHOG_KEY;
-  const apiHost = config.apiHost ?? ENV_POSTHOG_HOST;
-  if (!key) return;
-
+  // Lazy import on client
   import("posthog-js")
     .then((mod) => {
-      posthog = mod.default;
-      posthog.init(key, {
-        api_host: apiHost,
-        autocapture: false,
-        person_profiles: "identified_only",
-        capture_pageview: false,
-        capture_pageleave: false,
-      });
-      posthogLoaded = true;
+      ph = mod.default;
+      ph.init(ENV_POSTHOG_KEY!, { api_host: process.env.NEXT_PUBLIC_POSTHOG_HOST || "https://us.i.posthog.com" });
     })
     .catch(() => {
-      // no-op
+      // no-op if package missing or init fails
     });
 }
 
-export function capture(event: string, props?: Record<string, any>) {
-  const e: TelemetryEvent = { ts: Date.now(), event, props };
-  pushEvent(e);
-  if (!posthogLoaded || !posthog) return;
-  try {
-    posthog.capture(event, props);
-  } catch {
-    /* no-op */
-  }
+export function shutdownTelemetry() {
+  if (ph?.reset) ph.reset();
 }
 
-export function shutdownTelemetry() {
-  if (posthogLoaded && posthog) {
-    try {
-      posthog.shutdown();
-    } catch {
-      /* no-op */
-    }
-  }
-  posthogLoaded = false;
-  posthog = null;
+export function capture(event: string, props?: Record<string, any>) {
+  const e = { ts: Date.now(), event, props };
+  buffer.push(e);
+  if (buffer.length > 200) buffer = buffer.slice(buffer.length - 200);
+  if (ph?.capture) ph.capture(event, props);
+}
+
+export function subscribeToEvents(cb: (e: Event) => void) {
+  let i = 0;
+  const id = setInterval(() => {
+    if (i < buffer.length) cb(buffer[i++]);
+  }, 300);
+  return () => clearInterval(id);
+}
+
+export function getRecentEvents(): Event[] {
+  return buffer.slice(-10);
 }

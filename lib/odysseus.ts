@@ -1,28 +1,19 @@
-"use server";
-
 import { runCodexPrompt } from "./codexBridge";
 
-/**
- * Canonical list of supported modes. Useful for validation/UI.
- */
-export const ODYSSEUS_MODES = [
-  "build",
-  "design",
-  "refactor",
-  "analyze",
-  "deploy",
-  "api",
-  "mobile",
-] as const;
+export type OdysseusMode =
+  | "build"
+  | "design"
+  | "refactor"
+  | "analyze"
+  | "deploy"
+  | "api"
+  | "mobile";
 
-export type OdysseusMode = (typeof ODYSSEUS_MODES)[number];
+type RunOpts = {
+  mode?: OdysseusMode;
+  extraInstructions?: string;
+};
 
-/**
- * Core identity: Lindy-style autonomous engineer
- * with first-class Next.js (web) + Expo (mobile) support.
- *
- * IMPORTANT: Keep implementation-focused; the user expects repo edits.
- */
 const BASE_ODYSSEUS_INSTRUCTIONS = `
 You are Odysseus.ai, an autonomous software architect, similar in spirit to an AI engineer like Lindy.
 
@@ -42,7 +33,7 @@ Your mission:
 - Be decisive and implementation-focused: the user wants you to BUILD, not just explain.
 `.trim();
 
-const MODE_BEHAVIOR: Readonly<Record<OdysseusMode, string>> = Object.freeze({
+const MODE_BEHAVIOR: Record<OdysseusMode, string> = {
   build: `
 Mode: BUILD
 
@@ -57,7 +48,7 @@ Mode: BUILD
 - Prioritize working implementations over long explanations.
 - Scaffold minimal structure if missing.
 - Run install/build/test commands when helpful.
-`.trim(),
+`,
   design: `
 Mode: DESIGN
 
@@ -65,7 +56,7 @@ Mode: DESIGN
 - Improve visual hierarchy, spacing, and accessibility.
 - Refactor components/screens for design consistency.
 - Introduce or refine design tokens, themes, and shared UI components where useful.
-`.trim(),
+`,
   refactor: `
 Mode: REFACTOR
 
@@ -73,7 +64,7 @@ Mode: REFACTOR
 - Enhance readability, structure, and maintainability.
 - Remove duplication and extract reusable logic/components.
 - Strengthen typing, error handling, and tests where obviously beneficial.
-`.trim(),
+`,
   analyze: `
 Mode: ANALYZE
 
@@ -83,7 +74,7 @@ Mode: ANALYZE
   - Web vs mobile responsibilities (if both exist)
 - Make only small, safe improvements if needed.
 - Produce a concise technical report with risks, TODOs, and opportunities.
-`.trim(),
+`,
   deploy: `
 Mode: DEPLOY
 
@@ -92,7 +83,7 @@ Mode: DEPLOY
 - For Expo mobile apps, document and/or configure build profiles (e.g. EAS) if appropriate.
 - Configure simple CI pipelines for lint/test/build where useful.
 - Avoid destructive infra changes; keep modifications additive and clearly documented.
-`.trim(),
+`,
   api: `
 Mode: API
 
@@ -101,7 +92,7 @@ Mode: API
 - Define clear request/response contracts and validation.
 - Implement good error handling and logging.
 - Add or improve tests where appropriate.
-`.trim(),
+`,
   mobile: `
 Mode: MOBILE
 
@@ -113,101 +104,58 @@ Mode: MOBILE
 - Reuse shared logic and design patterns when a monorepo is present.
 - Respect platform conventions: gestures, safe areas, touch targets, etc.
 - Integrate with APIs, auth, or other backend logic as needed.
-`.trim(),
-});
+`,
+};
 
-function assertUnreachable(x: never): never {
-  // Why: compile-time exhaustiveness; if modes change, this fails loudly.
-  throw new Error(`Unhandled mode: ${String(x)}`);
-}
-
-function getModeBehavior(mode: OdysseusMode): string {
-  const behavior = MODE_BEHAVIOR[mode];
-  if (!behavior) {
-    // Should be unreachable if OdysseusMode matches keys
-    assertUnreachable(mode as never);
-  }
-  return behavior;
-}
-
-export interface BuildPromptOptions {
+/** Deterministic prompt builder (plain util; not a server action). */
+export function buildPrompt(input: {
   task: string;
-  mode?: OdysseusMode;
-  /**
-   * Appended under "General behavior". Great for ephemeral overrides,
-   * repo-specific notes, or temporary constraints.
-   */
+  mode: OdysseusMode;
   extraInstructions?: string;
-}
+}): string {
+  const instructions = `
+${BASE_ODYSSEUS_INSTRUCTIONS}
 
-/**
- * Build the Codex prompt string deterministically.
- */
-export function buildPrompt({
-  task,
-  mode = "build",
-  extraInstructions,
-}: BuildPromptOptions): string {
-  const trimmedTask = task?.trim();
-  if (!trimmedTask) {
-    throw new Error("Task cannot be empty.");
-  }
+${MODE_BEHAVIOR[input.mode]}
 
-  const generalBehavior = [
-    `General behavior:
+General behavior:
 - Use your tools (and connected services like Codex) to read and modify files directly.
 - Only ask the user follow-up questions if absolutely necessary.
 - At the end, output a concise summary:
   - What you did
   - Key files changed/added
-  - Any important TODOs or follow-ups.`.trim(),
-    extraInstructions?.trim(),
-  ]
-    .filter(Boolean)
-    .join("\n\n");
+  - Any important TODOs or follow-ups.
+${input.extraInstructions ? `
 
-  const instructions = `
-${BASE_ODYSSEUS_INSTRUCTIONS}
-
-${getModeBehavior(mode)}
-
-${generalBehavior}
+Extra instructions:
+${input.extraInstructions}` : ""}
 `.trim();
 
-  const prompt = `
+  return `
 ${instructions}
 
-Current mode: ${mode.toUpperCase()}
+Current mode: ${input.mode.toUpperCase()}
 
 User request:
-${trimmedTask}
+${input.task}
 
-Act now in ${mode.toUpperCase()} mode.
+Act now in ${input.mode.toUpperCase()} mode.
 `.trim();
-
-  return prompt;
 }
 
-export interface RunTaskOptions {
-  mode?: OdysseusMode;
-  extraInstructions?: string;
-  /**
-   * Dependency injection for testability. Defaults to runCodexPrompt.
-   */
-  runner?: (prompt: string) => Promise<string>;
-}
-
-/**
- * Execute an Odysseus task via Codex.
- */
+/** Server action (async) */
 export async function runOdysseusTask(
   task: string,
-  options: RunTaskOptions = {}
+  opts?: RunOpts
 ): Promise<string> {
-  const { mode = "build", extraInstructions, runner = runCodexPrompt } = options;
-
-  const prompt = buildPrompt({ task, mode, extraInstructions });
-  // Why: allow swapping the runner for tests/mocks; production uses Codex.
-  const result = await runner(prompt);
+  "use server";
+  const mode = opts?.mode ?? "build";
+  if (!task.trim()) throw new Error("Task cannot be empty.");
+  const prompt = buildPrompt({
+    task,
+    mode,
+    extraInstructions: opts?.extraInstructions,
+  });
+  const result = await runCodexPrompt(prompt);
   return result;
 }
