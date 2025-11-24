@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 type EnvVar = { key: string; value: string; target?: ("production" | "preview" | "development")[] };
 type SetEnvBody = {
