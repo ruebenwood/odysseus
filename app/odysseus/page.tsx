@@ -1,22 +1,24 @@
+// app/odysseus/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState, useTransition } from "react";
-import { buildPrompt, runOdysseusTask } from "@/lib/odysseus";
+import { runOdysseusTask, buildPrompt } from "@/lib/odysseus";
 import type { OdysseusMode } from "@/lib/odysseus";
 import {
-  ENV_POSTHOG_KEY,
-  capture,
-  getRecentEvents,
   initTelemetry,
+  capture,
   shutdownTelemetry,
   subscribeToEvents,
+  getRecentEvents,
+  ENV_POSTHOG_KEY,
 } from "@/lib/telemetry";
 
-/** -------------------------------------------------
- * Types
- * --------------------------------------------------*/
+/* =========================
+   Types & LS Keys
+   ========================= */
 type RunState = { result?: string; error?: string; info?: string };
 type UIEvent = { ts: number; event: string; props?: Record<string, any> };
+
 type UIPreset = {
   id: string;
   title: string;
@@ -25,21 +27,28 @@ type UIPreset = {
   task: string;
   builtin?: boolean;
 };
-type ScaffoldMap = Record<string, string>;
 
-/** -------------------------------------------------
- * LocalStorage keys
- * --------------------------------------------------*/
+type MacroPreset = {
+  id: string;
+  title: string;
+  task: string;
+  mode: OdysseusMode;
+  extra: string;
+  plannedFiles: string[];
+  createdAt: number;
+};
+
 const LS_PRESETS_KEY = "odysseus.presets";
 const LS_TELEMETRY_KEY = "odysseus.telemetry.enabled";
 const LS_DRYRUN_KEY = "odysseus.dryrun.enabled";
 const LS_REPO_URL_KEY = "odysseus.repo.url";
 const LS_REPO_INCLUDE_KEY = "odysseus.repo.include";
 const LS_LAST_PLAN_KEY = "odysseus.last.plan";
+const LS_MACROS_KEY = "odysseus.macros";
 
-/** -------------------------------------------------
- * Built-in presets (previous plus extras)
- * --------------------------------------------------*/
+/* =========================
+   Built-in Presets
+   ========================= */
 const BUILTIN_PRESETS: UIPreset[] = [
   {
     id: "expo",
@@ -97,28 +106,27 @@ const BUILTIN_PRESETS: UIPreset[] = [
   },
 ];
 
-/** -------------------------------------------------
- * Supabase scaffold helpers
- * --------------------------------------------------*/
+/* =========================
+   Scaffolds (mobile + web)
+   ========================= */
+type ScaffoldMap = Record<string, string>;
+
 function makeSupabaseScaffolds(kind: "router" | "tabs" = "router"): ScaffoldMap {
   const env = `# .env.local.example
-# Supabase project settings
 EXPO_PUBLIC_SUPABASE_URL=https://YOUR-PROJECT.supabase.co
 EXPO_PUBLIC_SUPABASE_ANON_KEY=YOUR-ANON-KEY
-
-# Deep link scheme (adjust as needed)
 EXPO_PUBLIC_SCHEME=odysseus
 EXPO_PUBLIC_DEEP_LINKS=odysseus://,https://odysseus.example.app`;
+
   const supabaseClient = `// apps/mobile/src/lib/supabase.ts
 import 'react-native-url-polyfill/auto';
 import { createClient } from '@supabase/supabase-js';
-
 const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL!;
 const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY!;
-
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { autoRefreshToken: true, persistSession: true, detectSessionInUrl: false },
 });`;
+
   const appConfigRouter = `// apps/mobile/app.config.ts
 import { ConfigContext, ExpoConfig } from '@expo/config';
 export default ({ config }: ConfigContext): ExpoConfig => {
@@ -132,137 +140,98 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     ios: { supportsTablet: true, bundleIdentifier: 'com.example.odysseus' },
     android: {
       package: 'com.example.odysseus',
-      intentFilters: [
-        {
-          action: 'VIEW',
-          autoVerify: true,
-          data: links.map((p) => {
-            const u = new URL(p);
-            return { scheme: u.protocol.replace(':', ''), host: u.host, pathPattern: '.*' };
-          }),
-          category: ['BROWSABLE', 'DEFAULT'],
-        },
-      ],
+      intentFilters: [{
+        action: 'VIEW',
+        autoVerify: true,
+        data: links.map((p) => { const u = new URL(p); return { scheme: u.protocol.replace(':',''), host: u.host, pathPattern: '.*' }; }),
+        category: ['BROWSABLE', 'DEFAULT'],
+      }],
     },
     extra: { router: 'expo-router' },
     experiments: { typedRoutes: true },
   };
 };`;
+
   const authCallbackRouter = `// apps/mobile/app/(auth)/callback.tsx
 import { useEffect } from 'react';
 import { Text, View } from 'react-native';
-import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useRouter } from 'expo-router';
 import { supabase } from '../../src/lib/supabase';
-
 export default function Callback() {
   const router = useRouter();
-  const params = useLocalSearchParams();
   useEffect(() => {
     const handle = async () => {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
+      const { data: { session } } = await supabase.auth.getSession();
       if (session) router.replace('/(tabs)/home');
     };
     handle();
-  }, [params]);
-  return (
-    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-      <Text>Completing sign-in…</Text>
-    </View>
-  );
+  }, []);
+  return <View style={{ flex:1, alignItems:'center', justifyContent:'center' }}><Text>Completing sign-in…</Text></View>;
 }`;
+
   const loginRouter = `// apps/mobile/app/(auth)/login.tsx
 import { useState } from 'react';
 import { View, TextInput, Text, Pressable } from 'react-native';
 import * as Linking from 'expo-linking';
 import { supabase } from '../../src/lib/supabase';
 import { useRouter } from 'expo-router';
-
 export default function Login() {
-  const [email, setEmail] = useState('');
-  const [sending, setSending] = useState(false);
+  const [email, setEmail] = useState(''); const [sending, setSending] = useState(false);
   const router = useRouter();
-
   async function sendMagicLink() {
     setSending(true);
     try {
       const redirectTo = Linking.createURL('/(auth)/callback');
-      const { error } = await supabase.auth.signInWithOtp({
-        email,
-        options: { emailRedirectTo: redirectTo },
-      });
-      if (error) throw error;
-      alert('Check your email for the magic link.');
-    } catch (e: any) {
-      alert(e.message ?? 'Failed to send magic link.');
-    } finally {
-      setSending(false);
-    }
+      const { error } = await supabase.auth.signInWithOtp({ email, options: { emailRedirectTo: redirectTo }});
+      if (error) throw error; alert('Check your email for the magic link.');
+    } catch (e:any) { alert(e.message ?? 'Failed to send magic link.'); }
+    finally { setSending(false); }
   }
-
   return (
     <View style={{ padding: 16, gap: 8 }}>
       <Text style={{ fontSize: 18, fontWeight: '600' }}>Sign in</Text>
-      <TextInput
-        placeholder="you@example.com"
-        autoCapitalize="none"
-        inputMode="email"
-        style={{ borderWidth: 1, borderColor: '#ddd', padding: 10, borderRadius: 8 }}
-        value={email}
-        onChangeText={setEmail}
-      />
-      <Pressable
-        onPress={sendMagicLink}
-        style={{ backgroundColor: 'black', padding: 12, borderRadius: 8, opacity: sending ? 0.6 : 1 }}
-        disabled={sending}
-      >
-        <Text style={{ color: 'white', textAlign: 'center' }}>{sending ? 'Sending…' : 'Send magic link'}</Text>
+      <TextInput placeholder="you@example.com" autoCapitalize="none" inputMode="email"
+        style={{ borderWidth:1, borderColor:'#ddd', padding:10, borderRadius:8 }}
+        value={email} onChangeText={setEmail} />
+      <Pressable onPress={sendMagicLink}
+        style={{ backgroundColor:'black', padding:12, borderRadius:8, opacity: sending?0.6:1 }} disabled={sending}>
+        <Text style={{ color:'white', textAlign:'center' }}>{sending? 'Sending…':'Send magic link'}</Text>
       </Pressable>
       <Pressable onPress={() => router.replace('/(tabs)/home')}>
-        <Text style={{ color: '#555', textAlign: 'center', marginTop: 12 }}>Skip for now</Text>
+        <Text style={{ color:'#555', textAlign:'center', marginTop:12 }}>Skip for now</Text>
       </Pressable>
     </View>
   );
 }`;
+
   const tabsLayout = `// apps/mobile/app/(tabs)/_layout.tsx
 import { Tabs, Slot } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { supabase } from '../../src/lib/supabase';
-
 export default function Layout() {
-  const [ready, setReady] = useState(false);
-  const [authed, setAuthed] = useState(false);
-
+  const [ready, setReady] = useState(false); const [authed, setAuthed] = useState(false);
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setAuthed(!!session);
-      setReady(true);
-    });
+    supabase.auth.getSession().then(({ data: { session } }) => { setAuthed(!!session); setReady(true); });
     const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => setAuthed(!!session));
     return () => sub.subscription?.unsubscribe();
   }, []);
-
   if (!ready) return null;
   if (!authed) return <Slot initialRouteName="(auth)/login" />;
-
   return (
     <Tabs>
-      <Tabs.Screen name="home" options={{ title: 'Home' }} />
-      <Tabs.Screen name="activity" options={{ title: 'Activity' }} />
-      <Tabs.Screen name="profile" options={{ title: 'Profile' }} />
+      <Tabs.Screen name="home" options={{ title:'Home' }} />
+      <Tabs.Screen name="activity" options={{ title:'Activity' }} />
+      <Tabs.Screen name="profile" options={{ title:'Profile' }} />
     </Tabs>
   );
 }`;
+
   const simpleScreen = (name: string) => `// apps/mobile/app/(tabs)/${name}.tsx
 import { View, Text } from 'react-native';
 export default function ${name[0].toUpperCase() + name.slice(1)}() {
-  return (
-    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-      <Text>${name} screen</Text>
-    </View>
-  );
+  return <View style={{ flex:1, alignItems:'center', justifyContent:'center' }}><Text>${name} screen</Text></View>;
 }`;
+
   return {
     "apps/mobile/src/lib/supabase.ts": supabaseClient,
     "apps/mobile/app.config.ts": appConfigRouter,
@@ -307,25 +276,21 @@ function scaffoldExtraInstructions(files: ScaffoldMap): string {
   const parts = Object.entries(files).map(
     ([path, content]) => `Create or overwrite file: \`${path}\`\n\n\`\`\`\n${content}\n\`\`\``
   );
-  return [
-    "Additionally, create the following files with *exact* contents:",
-    parts.join("\n\n"),
-    "Ensure builds succeed.",
-  ].join("\n\n");
+  return ["Additionally, create the following files with *exact* contents:", parts.join("\n\n"), "Ensure builds succeed."].join("\n\n");
 }
-
 function scaffoldWebExtraInstructions(map: Record<string, string>): string {
   return [
     "Additionally, create these Next.js web files with exact contents:",
-    ...Object.entries(map).map(
-      ([p, c]) => `Create or overwrite: \`${p}\`\n\n\`\`\`\n${c}\n\`\`\``
-    ),
+    ...Object.entries(map).map(([p, c]) => `Create or overwrite: \`${p}\`\n\n\`\`\`\n${c}\n\`\`\``),
   ].join("\n\n");
 }
 
-/** -------------------------------------------------
- * Utility helpers
- * --------------------------------------------------*/
+/* =========================
+   Utils: presets/macros/plan
+   ========================= */
+function uid() {
+  return Math.random().toString(36).slice(2, 10);
+}
 function readCustomPresets(): UIPreset[] {
   try {
     const raw = localStorage.getItem(LS_PRESETS_KEY);
@@ -336,184 +301,124 @@ function readCustomPresets(): UIPreset[] {
     return [];
   }
 }
-
 function writeCustomPresets(presets: UIPreset[]) {
   try {
     localStorage.setItem(LS_PRESETS_KEY, JSON.stringify(presets));
+  } catch {}
+}
+function readMacros(): MacroPreset[] {
+  try {
+    const raw = localStorage.getItem(LS_MACROS_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw) as MacroPreset[];
+    return Array.isArray(arr) ? arr : [];
   } catch {
-    /* ignore */
+    return [];
   }
 }
-
-function uid() {
-  return Math.random().toString(36).slice(2, 10);
+function writeMacros(macros: MacroPreset[]) {
+  try {
+    localStorage.setItem(LS_MACROS_KEY, JSON.stringify(macros));
+  } catch {}
 }
 
+/** Extract file-like paths from plan text */
 function parsePlannedFiles(planText: string): string[] {
   const paths = new Set<string>();
-  const codeFenceRegex = /`{1,3}([^`\n]+)`{1,3}/g;
-  const bulletRegex = /(?:^|\n)\s*(?:-|\*)\s+(?:Create|Modify|Update|Touch|Add)\s+(?:file|files|):?\s*`([^`]+)`/gi;
-  const inlinePath = /(?:^|\s)([A-Za-z0-9_\-./]+\/[A-Za-z0-9_\-./]+\.[A-Za-z0-9]+)/g;
-
+  const codeFencePath = /```(?:[a-zA-Z]+\n)?([\w./-]+\.[\w]+)```/g;
+  const tickPath = /`([\w./-]+\.[\w]+)`/g;
+  const bullet = /(?:^|\n)\s*[-*]\s+(?:Create|Modify|Update|Add)\s+(?:file|files)?:?\s*`([^`]+)`/gi;
   let m: RegExpExecArray | null;
-  while ((m = codeFenceRegex.exec(planText))) {
-    const t = m[1].trim();
-    if (t.includes("/") && t.split("/").pop()?.includes(".")) paths.add(t);
-  }
-  while ((m = bulletRegex.exec(planText))) paths.add(m[1].trim());
-  while ((m = inlinePath.exec(planText))) paths.add(m[1].trim());
-
-  return Array.from(paths).slice(0, 200);
+  while ((m = codeFencePath.exec(planText))) paths.add(m[1]);
+  while ((m = tickPath.exec(planText))) paths.add(m[1]);
+  while ((m = bullet.exec(planText))) paths.add(m[1]);
+  return Array.from(paths).slice(0, 300);
 }
 
-/** -------------------------------------------------
- * Vercel helper panel
- * --------------------------------------------------*/
-function VercelPanel() {
-  const [token, setToken] = useState<string>("");
-  const [name, setName] = useState<string>("odysseus-web");
-  const [teamId, setTeamId] = useState<string>("");
-  const [projectIdOrName, setProjectIdOrName] = useState<string>("");
-  const [envsText, setEnvsText] = useState<string>(`NEXT_PUBLIC_SUPABASE_URL=
-NEXT_PUBLIC_SUPABASE_ANON_KEY=
-EXPO_PUBLIC_SUPABASE_URL=
-EXPO_PUBLIC_SUPABASE_ANON_KEY=
-`);
-
-  useEffect(() => {
-    try {
-      const t = localStorage.getItem("odysseus.vercel.token") || "";
-      if (t) setToken(t);
-    } catch {
-      /* ignore */
-    }
-  }, []);
-
-  function saveToken(next: string) {
-    setToken(next);
-    try {
-      localStorage.setItem("odysseus.vercel.token", next);
-    } catch {
-      /* ignore */
-    }
+/* =========================
+   GitHub URL → {owner, repo}
+   ========================= */
+function parseRepoUrl(url: string): { owner?: string; repo?: string } {
+  try {
+    const u = new URL(url);
+    if (!/github\.com$/.test(u.hostname)) return {};
+    const parts = u.pathname.replace(/^\/+/ , "").split("/");
+    if (parts.length < 2) return {};
+    return { owner: parts[0], repo: parts[1].replace(/\.git$/, "") };
+  } catch {
+    return {};
   }
-
-  async function call(path: string, payload: any) {
-    const res = await fetch(path, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(token ? { "x-vercel-token": token } : {}),
-      },
-      body: JSON.stringify(payload),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data?.error || "Request failed");
-    return data;
-  }
-
-  async function createProject() {
-    const data = await call("/api/vercel/projects", {
-      name,
-      framework: "nextjs",
-      teamId: teamId || undefined,
-    });
-    alert(`Project created: ${data?.id || data?.name}`);
-    setProjectIdOrName(data?.id || data?.name || name);
-  }
-
-  async function setEnvs() {
-    const lines = envsText
-      .split("\n")
-      .map((l) => l.trim())
-      .filter(Boolean);
-    const envs = lines.map((l) => {
-      const [key, ...rest] = l.split("=");
-      return { key, value: rest.join("=") };
-    });
-    const target = ["production", "preview", "development"] as const;
-    const data = await call("/api/vercel/env", {
-      projectIdOrName: projectIdOrName || name,
-      envs: envs.map((e: any) => ({ ...e, target })),
-      teamId: teamId || undefined,
-    });
-    alert("Env results:\n" + JSON.stringify(data.results, null, 2));
-  }
-
-  async function triggerDeploy() {
-    const data = await call("/api/vercel/deploy", {
-      name,
-      projectId: projectIdOrName || undefined,
-      teamId: teamId || undefined,
-    });
-    alert("Deployment started:\n" + JSON.stringify(data, null, 2));
-  }
-
-  return (
-    <section className="rounded-2xl border p-4 shadow-sm md:p-5">
-      <div className="mb-2 flex items-center justify-between">
-        <h3 className="text-base font-medium">Vercel</h3>
-      </div>
-      <div className="grid gap-3">
-        <label className="text-sm">Vercel Token</label>
-        <input
-          type="password"
-          className="rounded-md border p-2 text-sm"
-          value={token}
-          onChange={(e) => saveToken(e.target.value)}
-          placeholder="Import from env or paste here"
-        />
-        <label className="text-sm">Team ID (optional)</label>
-        <input
-          className="rounded-md border p-2 text-sm"
-          value={teamId}
-          onChange={(e) => setTeamId(e.target.value)}
-          placeholder="team_XXXXXXXX (optional)"
-        />
-        <label className="text-sm">Project Name</label>
-        <input
-          className="rounded-md border p-2 text-sm"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="odysseus-web"
-        />
-        <label className="text-sm">Project ID/Name (for envs/deploy)</label>
-        <input
-          className="rounded-md border p-2 text-sm"
-          value={projectIdOrName}
-          onChange={(e) => setProjectIdOrName(e.target.value)}
-          placeholder="auto-filled after create"
-        />
-        <div className="flex gap-2">
-          <button onClick={createProject} className="rounded-md border px-3 py-1.5 text-sm">
-            Create project
-          </button>
-          <button onClick={triggerDeploy} className="rounded-md border px-3 py-1.5 text-sm">
-            Trigger deploy
-          </button>
-        </div>
-
-        <label className="mt-2 text-sm">Env vars (KEY=VALUE per line)</label>
-        <textarea
-          className="min-h-[120px] rounded-md border p-2 text-sm"
-          value={envsText}
-          onChange={(e) => setEnvsText(e.target.value)}
-        />
-        <button onClick={setEnvs} className="mt-1 rounded-md border px-3 py-1.5 text-sm">
-          Set env vars
-        </button>
-
-        <p className="text-xs text-gray-500">
-          Token sent via header to API routes; server falls back to VERCEL_TOKEN env if header is absent.
-        </p>
-      </div>
-    </section>
-  );
 }
 
-/** -------------------------------------------------
- * Component
- * --------------------------------------------------*/
+/* =========================
+   Vercel Git steps generator
+   ========================= */
+function renderVercelGitSteps(opts: {
+  repoUrl: string;
+  projectName: string;
+  envPairs: Record<string, string>;
+  tokenVar?: string;
+  teamId?: string;
+}) {
+  const { owner, repo } = parseRepoUrl(opts.repoUrl);
+  const tokenVar = opts.tokenVar || "VERCEL_TOKEN";
+  const teamQs = opts.teamId ? `?teamId=${opts.teamId}` : "";
+  const project = opts.projectName || (repo ? `${repo}` : "odysseus-web");
+  const envs = Object.entries(opts.envPairs)
+    .filter(([k, v]) => k && v !== undefined)
+    .map(
+      ([k, v]) =>
+        `curl -s -X POST "https://api.vercel.com/v9/projects/${project}/env${teamQs}" \\
+  -H "Authorization: Bearer $${tokenVar}" -H "Content-Type: application/json" \\
+  -d '${JSON.stringify({
+    key: k,
+    value: v,
+    target: ["production", "preview", "development"],
+    type: "encrypted",
+  })}'`
+    )
+    .join("\n\n");
+
+  const bodyCreate = {
+    name: project,
+    framework: "nextjs",
+    ...(opts.teamId ? { teamId: opts.teamId } : {}),
+  };
+
+  const linkPayload = {
+    gitRepository: owner && repo ? { type: "github", repo: `${owner}/${repo}` } : undefined,
+  };
+
+  return `# 1) Create project
+curl -s -X POST "https://api.vercel.com/v10/projects${teamQs}" \\
+  -H "Authorization: Bearer $${tokenVar}" -H "Content-Type: application/json" \\
+  -d '${JSON.stringify(bodyCreate)}'
+
+# 2) Link GitHub repo to project
+curl -s -X PATCH "https://api.vercel.com/v10/projects/${project}${teamQs}" \\
+  -H "Authorization: Bearer $${tokenVar}" -H "Content-Type: application/json" \\
+  -d '${JSON.stringify(linkPayload)}'
+
+# 3) Set environment variables
+${envs || "# (add envs above, one POST per key)"}
+
+# 4) Trigger deploy
+curl -s -X POST "https://api.vercel.com/v13/deployments${teamQs}" \\
+  -H "Authorization: Bearer $${tokenVar}" -H "Content-Type: application/json" \\
+  -d '${JSON.stringify({
+    name: project,
+    projectSettings: { framework: "nextjs" },
+  })}'
+
+# Notes:
+# - Export your token: export ${tokenVar}=vercel_personal_token
+# - If your project name differs from repo, keep 'project' consistent across steps.
+# - Prefer Git-connected builds after step 2 (push to main to deploy).`;
+}
+
+/* =========================
+   Component
+   ========================= */
 export default function OdysseusPage() {
   const [isPending, startTransition] = useTransition();
   const [state, setState] = useState<RunState>({});
@@ -540,18 +445,19 @@ export default function OdysseusPage() {
   const [lastPlanText, setLastPlanText] = useState<string>("");
   const [plannedFiles, setPlannedFiles] = useState<string[]>([]);
 
+  const [macros, setMacros] = useState<MacroPreset[]>([]);
+
   useEffect(() => {
     try {
       setTelemetryEnabled(localStorage.getItem(LS_TELEMETRY_KEY) === "1");
       setDryRun(localStorage.getItem(LS_DRYRUN_KEY) === "1");
       setRepoUrl(localStorage.getItem(LS_REPO_URL_KEY) || "");
       setIncludeRepoInPrompt((localStorage.getItem(LS_REPO_INCLUDE_KEY) ?? "1") === "1");
-      const plan = localStorage.getItem(LS_LAST_PLAN_KEY) || "";
-      setLastPlanText(plan);
-      if (plan) setPlannedFiles(parsePlannedFiles(plan));
-    } catch {
-      /* ignore */
-    }
+      const lp = localStorage.getItem(LS_LAST_PLAN_KEY) || "";
+      setLastPlanText(lp);
+      if (lp) setPlannedFiles(parsePlannedFiles(lp));
+      setMacros(readMacros());
+    } catch {}
     setEvents(getRecentEvents());
     setCustomPresets(readCustomPresets());
   }, []);
@@ -638,12 +544,7 @@ export default function OdysseusPage() {
 
     if (dryRun) {
       const prompt = buildPrompt({ task: trimmed, mode: modeVal, extraInstructions: effectiveExtra });
-      const preview = [
-        "DRY RUN (no repo edits performed)",
-        "",
-        "––– Prompt that would be sent –––",
-        prompt,
-      ].join("\n");
+      const preview = ["DRY RUN (no repo edits performed)", "", "––– Prompt that would be sent –––", prompt].join("\n");
       setState({ result: preview });
       capture("odysseus_dry_run", { mode: modeVal, presetId: presetId ?? null });
       return;
@@ -661,9 +562,7 @@ export default function OdysseusPage() {
       setState({ result: out });
       capture("odysseus_run_success", { mode: modeVal, via: "server_action", presetId: presetId ?? null });
       return;
-    } catch {
-      /* fallthrough */
-    }
+    } catch {}
 
     try {
       const res = await fetch("/api/odysseus", {
@@ -688,25 +587,6 @@ export default function OdysseusPage() {
     });
   }
 
-  function saveRepoUrl(next: string) {
-    setRepoUrl(next);
-    try {
-      localStorage.setItem(LS_REPO_URL_KEY, next);
-    } catch {
-      /* ignore */
-    }
-    capture("odysseus_repo_url_set", { hasUrl: !!next.trim() });
-  }
-
-  function toggleIncludeRepo(next: boolean) {
-    setIncludeRepoInPrompt(next);
-    try {
-      localStorage.setItem(LS_REPO_INCLUDE_KEY, next ? "1" : "0");
-    } catch {
-      /* ignore */
-    }
-  }
-
   async function copy(text?: string) {
     if (!text) return;
     try {
@@ -718,50 +598,23 @@ export default function OdysseusPage() {
     }
   }
 
-  function clearEvents() {
-    setEvents([]);
+  function saveRepoUrl(next: string) {
+    setRepoUrl(next);
+    try {
+      localStorage.setItem(LS_REPO_URL_KEY, next);
+    } catch {}
+    capture("odysseus_repo_url_set", { hasUrl: !!next.trim() });
   }
-
-  function openCreatePreset() {
-    setEditing({ id: "", title: "", description: "", mode: "build", task: "", builtin: false });
-    setShowPresetModal(true);
-  }
-
-  function openEditPreset(p: UIPreset) {
-    if (p.builtin) return;
-    setEditing({ ...p });
-    setShowPresetModal(true);
-  }
-
-  function removePreset(id: string) {
-    const next = customPresets.filter((p) => p.id !== id);
-    setCustomPresets(next);
-    writeCustomPresets(next);
-    capture("odysseus_preset_delete", { id });
-  }
-
-  function savePreset() {
-    if (!editing) return;
-    const isNew = !editing.id;
-    const draft = { ...editing };
-    if (isNew) draft.id = `custom_${uid()}`;
-
-    const next = [...customPresets.filter((p) => p.id !== draft.id), draft];
-    setCustomPresets(next);
-    writeCustomPresets(next);
-    setShowPresetModal(false);
-    setEditing(null);
-    capture(isNew ? "odysseus_preset_create" : "odysseus_preset_update", {
-      id: draft.id,
-      mode: draft.mode,
-      title: draft.title,
-    });
+  function toggleIncludeRepo(next: boolean) {
+    setIncludeRepoInPrompt(next);
+    try {
+      localStorage.setItem(LS_REPO_INCLUDE_KEY, next ? "1" : "0");
+    } catch {}
   }
 
   async function planEdits() {
     const trimmed = task.trim();
     if (!trimmed) return;
-
     setState({ info: "Planning (no edits)…" });
     const planExtra = [
       "IMPORTANT: Do NOT edit the repo.",
@@ -770,7 +623,6 @@ export default function OdysseusPage() {
       "- brief rationale per file (1–2 lines)",
       "- any commands to run (code block)",
     ].join("\n");
-
     try {
       const out = await runOdysseusTask(trimmed, {
         mode: "analyze",
@@ -807,28 +659,76 @@ export default function OdysseusPage() {
   }
 
   function writeScaffoldsToRepo(sc: Record<string, string>) {
-    const taskLines = Object.keys(sc)
-      .map((p) => `- ${p}`)
-      .join("\n");
+    const taskLines = Object.keys(sc).map((p) => `- ${p}`).join("\n");
     const taskText = ["Create ONLY the following files in the repo:", taskLines].join("\n");
     const extraText = scaffoldExtraInstructions(sc);
     run(taskText, "build", [extra, composeRepoExtra(), extraText].filter(Boolean).join("\n\n"), "scaffolds_write_now");
   }
 
-  function downloadFile(path: string, content: string) {
-    const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = path.replace(/.*\//, "");
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+  function saveMacro() {
+    if (!task.trim() || plannedFiles.length === 0) {
+      setState({ error: "Need a task and a parsed plan with files." });
+      return;
+    }
+    const title = prompt("Macro title?", `Macro: ${task.slice(0, 40)}`) || "";
+    if (!title.trim()) return;
+    const macro: MacroPreset = {
+      id: `macro_${uid()}`,
+      title: title.trim(),
+      task,
+      mode,
+      extra,
+      plannedFiles: [...plannedFiles],
+      createdAt: Date.now(),
+    };
+    const next = [...macros, macro];
+    setMacros(next);
+    writeMacros(next);
+    capture("odysseus_macro_saved", { files: plannedFiles.length });
   }
 
-  function downloadAllScaffolds(sc: Record<string, string>) {
-    Object.entries(sc).forEach(([path, content]) => downloadFile(path, content));
+  function runMacro(m: MacroPreset) {
+    const filesList = m.plannedFiles.map((p) => `- ${p}`).join("\n");
+    const guardedTask = [
+      "(Macro) Apply planned changes.",
+      "Create/modify ONLY these files (no other files):",
+      filesList,
+    ].join("\n");
+    const guardExtra = [
+      "IMPORTANT: Do not introduce edits outside the listed files.",
+      "If a file is missing from the list but required, STOP and report.",
+    ].join("\n");
+    run(guardedTask, "build", [m.extra, guardExtra, composeRepoExtra()].filter(Boolean).join("\n\n"), "macro_apply");
+  }
+
+  function deleteMacro(id: string) {
+    const next = macros.filter((x) => x.id !== id);
+    setMacros(next);
+    writeMacros(next);
+  }
+
+  function generateVercelGitIntegrationSteps() {
+    if (!repoUrl.trim()) {
+      setState({ error: "Set a valid GitHub repo URL first." });
+      return;
+    }
+    const projectNameGuess = parseRepoUrl(repoUrl).repo || "odysseus-web";
+    const steps = renderVercelGitSteps({
+      repoUrl,
+      projectName: projectNameGuess,
+      envPairs: {
+        NEXT_PUBLIC_SUPABASE_URL: "",
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: "",
+        EXPO_PUBLIC_SUPABASE_URL: "",
+        EXPO_PUBLIC_SUPABASE_ANON_KEY: "",
+      },
+      tokenVar: "VERCEL_TOKEN",
+    });
+    setState({ result: steps, info: "Generated Vercel Git integration steps." });
+  }
+
+  function clearEvents() {
+    setEvents([]);
   }
 
   return (
@@ -840,7 +740,6 @@ export default function OdysseusPage() {
             Lindy-style autonomous edits for Next.js + Expo. Build, refactor, deploy.
           </p>
         </div>
-
         <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center">
           <label className="flex items-center gap-2 text-sm">
             <input
@@ -850,22 +749,20 @@ export default function OdysseusPage() {
                 setDryRun(e.target.checked);
                 try {
                   localStorage.setItem(LS_DRYRUN_KEY, e.target.checked ? "1" : "0");
-                } catch {
-                  /* ignore */
-                }
+                } catch {}
               }}
             />
             <span className="text-gray-700">Dry-run (no repo edits)</span>
           </label>
-
           <button
-            onClick={openCreatePreset}
+            onClick={() => {
+              setEditing({ id: "", title: "", description: "", mode: "build", task: "", builtin: false });
+              setShowPresetModal(true);
+            }}
             className="rounded-md border px-3 py-1.5 text-sm"
-            title="Create custom presets"
           >
             Manage Presets
           </button>
-
           <label className="flex items-center gap-2 text-sm">
             <input
               type="checkbox"
@@ -874,9 +771,7 @@ export default function OdysseusPage() {
                 setTelemetryEnabled(e.target.checked);
                 try {
                   localStorage.setItem(LS_TELEMETRY_KEY, e.target.checked ? "1" : "0");
-                } catch {
-                  /* ignore */
-                }
+                } catch {}
               }}
             />
             <span className="text-gray-600">Analytics (PostHog)</span>
@@ -893,6 +788,7 @@ NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}</pre>
         </div>
       )}
 
+      {/* GitHub Repo Connect */}
       <section className="rounded-2xl border p-4 shadow-sm md:p-5">
         <h3 className="text-base font-medium">GitHub Repo Connect</h3>
         <div className="mt-3 grid gap-3">
@@ -910,22 +806,43 @@ NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}</pre>
             />
             <span>Include repo metadata in prompt (helps Vercel Git integration)</span>
           </label>
+          <div className="flex flex-wrap gap-2">
+            <button
+              onClick={generateVercelGitIntegrationSteps}
+              className="rounded-md border px-3 py-1.5 text-sm"
+            >
+              Generate Vercel Git integration steps
+            </button>
+          </div>
         </div>
       </section>
 
+      {/* Presets */}
       <section className="grid gap-4 md:grid-cols-2">
         {allPresets.map((p) => (
           <div key={p.id} className="rounded-2xl border p-4 text-left shadow-sm md:p-5">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-medium">{p.title}</h2>
               <div className="flex items-center gap-2">
-                <span className="rounded-full border px-2 py-0.5 text-xs">{p.mode.toUpperCase()}</span>
+                <span className="rounded-full border px-2 py-0.5 text-xs">
+                  {p.mode.toUpperCase()}
+                </span>
                 {!p.builtin && (
                   <>
-                    <button onClick={() => openEditPreset(p)} className="rounded border px-2 py-0.5 text-xs">
+                    <button
+                      onClick={() => setEditing(p)}
+                      className="rounded border px-2 py-0.5 text-xs"
+                    >
                       Edit
                     </button>
-                    <button onClick={() => removePreset(p.id)} className="rounded border px-2 py-0.5 text-xs">
+                    <button
+                      onClick={() => {
+                        const next = customPresets.filter((x) => x.id !== p.id);
+                        setCustomPresets(next);
+                        writeCustomPresets(next);
+                      }}
+                      className="rounded border px-2 py-0.5 text-xs"
+                    >
                       Delete
                     </button>
                   </>
@@ -958,6 +875,7 @@ NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}</pre>
         ))}
       </section>
 
+      {/* Custom task + Plan/Apply */}
       <section className="rounded-2xl border p-4 shadow-sm md:p-5">
         <h3 className="text-base font-medium">Custom task</h3>
         <div className="mt-3 grid gap-3">
@@ -996,7 +914,11 @@ NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}</pre>
             >
               {isPending ? (dryRun ? "Previewing…" : "Running…") : dryRun ? "Preview prompt" : "Run task"}
             </button>
-            <button onClick={planEdits} disabled={!canRun || isPending} className="rounded-lg border px-3 py-2 text-sm">
+            <button
+              onClick={planEdits}
+              disabled={!canRun || isPending}
+              className="rounded-lg border px-3 py-2 text-sm"
+            >
               Plan (no edits)
             </button>
             <button
@@ -1006,7 +928,16 @@ NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}</pre>
             >
               Apply Plan
             </button>
+            <button
+              onClick={saveMacro}
+              disabled={plannedFiles.length === 0}
+              className="rounded-lg border px-3 py-2 text-sm"
+              title="Save current task + plan as a macro you can re-run later"
+            >
+              Save as Macro
+            </button>
           </div>
+
           {lastPlanText && (
             <details className="rounded-lg border p-3">
               <summary className="cursor-pointer text-sm font-medium">
@@ -1032,6 +963,7 @@ NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}</pre>
         </div>
       </section>
 
+      {/* Output */}
       <section className="rounded-2xl border p-4 shadow-sm md:p-5">
         <div className="flex items-center justify-between">
           <h3 className="text-base font-medium">Output</h3>
@@ -1040,7 +972,6 @@ NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}</pre>
               onClick={() => copy(state.result)}
               disabled={!state.result}
               className="rounded-md border px-2 py-1 text-xs disabled:opacity-50"
-              title="Copy the model output"
             >
               Copy Output
             </button>
@@ -1048,21 +979,19 @@ NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}</pre>
               onClick={() => setTask(state.result ?? "")}
               disabled={!state.result}
               className="rounded-md border px-2 py-1 text-xs disabled:opacity-50"
-              title="Move output into the task editor"
             >
               Use Output as Task
             </button>
             <button
               onClick={() =>
                 copy(
-                  lastPrompt || lastExtra
-                    ? `Mode: ${lastMode}\n\nTask:\n${lastPrompt}\n\nExtra Instructions:\n${lastExtra}\n\nDryRun: ${dryRun}`
+                  (lastPrompt || lastExtra)
+                    ? `Mode: ${lastMode}\n\nTask:\n${lastPrompt}\n\nExtra Instructions:\n${lastExtra}\n`
                     : ""
                 )
               }
               disabled={!lastPrompt && !lastExtra}
               className="rounded-md border px-2 py-1 text-xs disabled:opacity-50"
-              title="Copy the last sent prompt"
             >
               Copy Sent Prompt
             </button>
@@ -1098,12 +1027,12 @@ NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}</pre>
         )}
       </section>
 
+      {/* Scaffolds panel */}
       {scaffolds && (
         <section className="rounded-2xl border p-4 shadow-sm md:p-5">
           <div className="mb-2 flex items-center justify-between">
             <h3 className="text-base font-medium">
-              Scaffolds for
-              {" "}
+              Scaffolds for{" "}
               {lastPresetId === "expo_router_supabase_magiclink"
                 ? "Expo Router + Supabase"
                 : lastPresetId === "next_supabase_guard"
@@ -1112,7 +1041,19 @@ NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}</pre>
             </h3>
             <div className="flex items-center gap-2">
               <button
-                onClick={() => downloadAllScaffolds(scaffolds)}
+                onClick={() =>
+                  Object.entries(scaffolds).forEach(([path, content]) => {
+                    const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = path.replace(/.*\//, "");
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                    URL.revokeObjectURL(url);
+                  })
+                }
                 className="rounded-md border px-2 py-1 text-xs"
               >
                 Download all
@@ -1126,7 +1067,7 @@ NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}</pre>
             </div>
           </div>
           <p className="text-xs text-gray-600">
-            Use these files directly or let Odysseus create them. The button above sends a focused build task.
+            Use these files directly or let Odysseus create them.
           </p>
           <ul className="mt-3 space-y-2">
             {Object.entries(scaffolds).map(([path, content]) => (
@@ -1139,7 +1080,17 @@ NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}</pre>
                     </button>
                     <button
                       className="rounded border px-2 py-1 text-xs"
-                      onClick={() => downloadFile(path, content)}
+                      onClick={() => {
+                        const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement("a");
+                        a.href = url;
+                        a.download = path.replace(/.*\//, "");
+                        document.body.appendChild(a);
+                        a.click();
+                        a.remove();
+                        URL.revokeObjectURL(url);
+                      }}
                     >
                       Download
                     </button>
@@ -1151,6 +1102,50 @@ NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}</pre>
         </section>
       )}
 
+      {/* Macros */}
+      <section className="rounded-2xl border p-4 shadow-sm md:p-5">
+        <div className="mb-2 flex items-center justify-between">
+          <h3 className="text-base font-medium">Macro presets (Plan → Apply)</h3>
+          <span className="text-xs text-gray-500">Saved: {macros.length}</span>
+        </div>
+        {macros.length === 0 ? (
+          <p className="text-sm text-gray-500">No macros yet. Run Plan and click “Save as Macro”.</p>
+        ) : (
+          <div className="grid gap-2">
+            {macros
+              .slice()
+              .sort((a, b) => b.createdAt - a.createdAt)
+              .map((m) => (
+                <div key={m.id} className="rounded-md border p-2">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-sm font-medium">{m.title}</div>
+                      <div className="text-xs text-gray-500">
+                        {m.mode.toUpperCase()} • {m.plannedFiles.length} files
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        className="rounded border px-2 py-1 text-xs"
+                        onClick={() => runMacro(m)}
+                      >
+                        Run macro
+                      </button>
+                      <button
+                        className="rounded border px-2 py-1 text-xs"
+                        onClick={() => deleteMacro(m.id)}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+          </div>
+        )}
+      </section>
+
+      {/* Events table */}
       <section className="rounded-2xl border p-4 shadow-sm md:p-5">
         <div className="mb-2 flex items-center justify-between">
           <h3 className="text-base font-medium">Recent analytics events</h3>
@@ -1179,7 +1174,9 @@ NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}</pre>
                   .reverse()
                   .map((e, i) => (
                     <tr key={i} className="border-b last:border-0">
-                      <td className="px-2 py-2 align-top">{new Date(e.ts).toLocaleTimeString()}</td>
+                      <td className="px-2 py-2 align-top">
+                        {new Date(e.ts).toLocaleTimeString()}
+                      </td>
                       <td className="px-2 py-2 align-top">{e.event}</td>
                       <td className="px-2 py-2 align-top">
                         <pre className="whitespace-pre-wrap text-xs">
@@ -1194,14 +1191,14 @@ NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}</pre>
         )}
       </section>
 
-      <VercelPanel />
-
+      {/* Preset Editor Modal */}
       {showPresetModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
           <div className="absolute inset-0 bg-black/40" onClick={() => setShowPresetModal(false)} />
           <div className="relative z-10 w-full max-w-lg rounded-2xl bg-white p-5 shadow-xl">
-            <h3 className="text-base font-semibold">{editing?.id ? "Edit preset" : "New preset"}</h3>
-
+            <h3 className="text-base font-semibold">
+              {editing?.id ? "Edit preset" : "New preset"}
+            </h3>
             <div className="mt-4 grid gap-3">
               <label className="text-sm">Title</label>
               <input
@@ -1239,14 +1236,25 @@ NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}</pre>
                 placeholder="Describe exactly what you want Odysseus to build."
               />
             </div>
-
             <div className="mt-5 flex items-center justify-end gap-2">
-              <button className="rounded-md border px-3 py-1.5 text-sm" onClick={() => setShowPresetModal(false)}>
+              <button
+                className="rounded-md border px-3 py-1.5 text-sm"
+                onClick={() => setShowPresetModal(false)}
+              >
                 Cancel
               </button>
               <button
                 className="rounded-md bg-black px-3 py-1.5 text-sm text-white disabled:opacity-50"
-                onClick={savePreset}
+                onClick={() => {
+                  if (!editing) return;
+                  const isNew = !editing.id;
+                  const draft = { ...editing, id: isNew ? `custom_${uid()}` : editing.id };
+                  const next = [...customPresets.filter((p) => p.id !== draft.id), draft];
+                  setCustomPresets(next);
+                  writeCustomPresets(next);
+                  setShowPresetModal(false);
+                  setEditing(null);
+                }}
                 disabled={!editing?.title?.trim() || !editing?.task?.trim()}
               >
                 Save preset
@@ -1264,10 +1272,17 @@ NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}</pre>
                         <div className="text-xs text-gray-500">{p.mode.toUpperCase()}</div>
                       </div>
                       <div className="flex items-center gap-2">
-                        <button className="rounded border px-2 py-1 text-xs" onClick={() => openEditPreset(p)}>
+                        <button className="rounded border px-2 py-1 text-xs" onClick={() => setEditing({ ...p })}>
                           Edit
                         </button>
-                        <button className="rounded border px-2 py-1 text-xs" onClick={() => removePreset(p.id)}>
+                        <button
+                          className="rounded border px-2 py-1 text-xs"
+                          onClick={() => {
+                            const next = customPresets.filter((x) => x.id !== p.id);
+                            setCustomPresets(next);
+                            writeCustomPresets(next);
+                          }}
+                        >
                           Delete
                         </button>
                       </div>
