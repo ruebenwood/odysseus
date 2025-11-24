@@ -23,6 +23,13 @@ export async function POST(req: Request) {
     const mode: OdysseusMode = (body.mode as OdysseusMode) ?? "build";
     const extraInstructions = body.extraInstructions;
 
+    // Lightweight server log for observability (no PII).
+    console.info("[/api/odysseus] run", {
+      mode,
+      taskLen: task.length,
+      extra: !!extraInstructions,
+    });
+
     const result = await runOdysseusTask(task, { mode, extraInstructions });
     return NextResponse.json({ result });
   } catch (err: any) {

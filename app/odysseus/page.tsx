@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { runOdysseusTask } from "@/lib/odysseus";
 import type { OdysseusMode } from "@/lib/odysseus";
+import { capture, initTelemetry, shutdownTelemetry } from "@/lib/telemetry";
 
 type RunState = {
   result?: string;
@@ -37,6 +38,8 @@ const PRESETS: Array<{
   },
 ];
 
+const TELEMETRY_STORAGE_KEY = "odysseus.telemetry.enabled";
+
 export default function OdysseusPage() {
   const [isPending, startTransition] = useTransition();
   const [state, setState] = useState<RunState>({});
@@ -44,8 +47,38 @@ export default function OdysseusPage() {
   const [mode, setMode] = useState<OdysseusMode>("build");
   const [lastPrompt, setLastPrompt] = useState<string>("");
   const [lastMode, setLastMode] = useState<OdysseusMode>("build");
+  const [telemetryEnabled, setTelemetryEnabled] = useState<boolean>(false);
 
-  async function runWithFallback(taskText: string, modeVal: OdysseusMode) {
+  // Telemetry: init from localStorage; lazy-init PostHog if allowed.
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(TELEMETRY_STORAGE_KEY);
+      const enabled = raw === "1";
+      setTelemetryEnabled(enabled);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    if (telemetryEnabled) {
+      initTelemetry({
+        enabled: true,
+        // env vars are read in wrapper; override if you want custom host/key
+      });
+      capture("odysseus_ui_open", {});
+    } else {
+      shutdownTelemetry();
+    }
+  }, [telemetryEnabled]);
+
+  const canRun = useMemo(() => !!task.trim(), [task]);
+
+  async function runWithFallback(
+    taskText: string,
+    modeVal: OdysseusMode,
+    presetId?: string
+  ) {
     const trimmed = taskText.trim();
     if (!trimmed) return;
 
@@ -53,13 +86,29 @@ export default function OdysseusPage() {
     setLastPrompt(trimmed);
     setLastMode(modeVal);
 
+    if (telemetryEnabled) {
+      capture("odysseus_run_start", {
+        mode: modeVal,
+        taskLen: trimmed.length,
+        presetId: presetId ?? null,
+      });
+    }
+
     // 1) Try server action
     try {
       const out = await runOdysseusTask(trimmed, { mode: modeVal });
       setState({ result: out });
+      if (telemetryEnabled) {
+        capture("odysseus_run_success", {
+          mode: modeVal,
+          taskLen: trimmed.length,
+          presetId: presetId ?? null,
+          via: "server_action",
+        });
+      }
       return;
-    } catch (err: any) {
-      // Why: server actions might be disabled; fallback to API route.
+    } catch {
+      // fall through
     }
 
     // 2) Fallback to API route
@@ -72,14 +121,31 @@ export default function OdysseusPage() {
       const data = (await res.json()) as { result?: string; error?: string };
       if (!res.ok) throw new Error(data.error || "API error");
       setState({ result: data.result });
+      if (telemetryEnabled) {
+        capture("odysseus_run_success", {
+          mode: modeVal,
+          taskLen: trimmed.length,
+          presetId: presetId ?? null,
+          via: "api_route",
+        });
+      }
     } catch (err: any) {
-      setState({ error: err?.message ?? "Unknown error" });
+      const msg = err?.message ?? "Unknown error";
+      setState({ error: msg });
+      if (telemetryEnabled) {
+        capture("odysseus_run_error", {
+          mode: modeVal,
+          taskLen: trimmed.length,
+          presetId: presetId ?? null,
+          error: msg.slice(0, 300),
+        });
+      }
     }
   }
 
-  function run(taskText: string, modeVal: OdysseusMode) {
+  function run(taskText: string, modeVal: OdysseusMode, presetId?: string) {
     startTransition(() => {
-      void runWithFallback(taskText, modeVal);
+      void runWithFallback(taskText, modeVal, presetId);
     });
   }
 
@@ -94,16 +160,37 @@ export default function OdysseusPage() {
     }
   }
 
+  function toggleTelemetry(next: boolean) {
+    setTelemetryEnabled(next);
+    try {
+      localStorage.setItem(TELEMETRY_STORAGE_KEY, next ? "1" : "0");
+    } catch {
+      // ignore
+    }
+  }
+
   return (
     <div className="mx-auto max-w-5xl p-6 space-y-8">
-      <header className="space-y-1">
-        <h1 className="text-2xl font-semibold tracking-tight">
-          Odysseus Presets
-        </h1>
-        <p className="text-sm text-gray-500">
-          One-click tasks for Lindy-style repo edits with Next.js + Expo. Falls
-          back to API route if server actions are unavailable.
-        </p>
+      <header className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="space-y-1">
+          <h1 className="text-2xl font-semibold tracking-tight">
+            Odysseus Presets
+          </h1>
+          <p className="text-sm text-gray-500">
+            One-click tasks for Lindy-style repo edits with Next.js + Expo. Falls
+            back to API when server actions aren’t available.
+          </p>
+        </div>
+
+        {/* Telemetry toggle */}
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={telemetryEnabled}
+            onChange={(e) => toggleTelemetry(e.target.checked)}
+          />
+          <span className="text-gray-600">Analytics (PostHog)</span>
+        </label>
       </header>
 
       {/* Presets */}
@@ -111,7 +198,7 @@ export default function OdysseusPage() {
         {PRESETS.map((p) => (
           <button
             key={p.id}
-            onClick={() => run(p.task, p.mode)}
+            onClick={() => run(p.task, p.mode, p.id)}
             disabled={isPending}
             className="rounded-2xl border p-4 text-left shadow-sm transition hover:shadow md:p-5 disabled:opacity-60"
           >
@@ -156,7 +243,7 @@ export default function OdysseusPage() {
             </select>
             <button
               onClick={() => run(task, mode)}
-              disabled={isPending || !task.trim()}
+              disabled={isPending || !canRun}
               className="ml-auto rounded-lg bg-black px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
             >
               {isPending ? "Running…" : "Run task"}
@@ -187,7 +274,9 @@ export default function OdysseusPage() {
               Use Output as Task
             </button>
             <button
-              onClick={() => copy(lastPrompt ? `Mode: ${lastMode}\n\n${lastPrompt}` : "")}
+              onClick={() =>
+                copy(lastPrompt ? `Mode: ${lastMode}\n\n${lastPrompt}` : "")
+              }
               disabled={!lastPrompt}
               className="rounded-md border px-2 py-1 text-xs disabled:opacity-50"
               title="Copy the last sent prompt"
@@ -196,6 +285,17 @@ export default function OdysseusPage() {
             </button>
           </div>
         </div>
+
+        {state.info && !state.error && isPending && (
+          // Loading skeleton
+          <div className="mt-3 space-y-2">
+            <div className="h-4 w-1/3 animate-pulse rounded bg-gray-200" />
+            <div className="h-3 w-full animate-pulse rounded bg-gray-200" />
+            <div className="h-3 w-11/12 animate-pulse rounded bg-gray-200" />
+            <div className="h-3 w-10/12 animate-pulse rounded bg-gray-200" />
+            <div className="h-3 w-9/12 animate-pulse rounded bg-gray-200" />
+          </div>
+        )}
 
         {state.info && (
           <p className="mt-3 rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700">
@@ -208,9 +308,11 @@ export default function OdysseusPage() {
             {state.error}
           </p>
         ) : (
-          <pre className="mt-3 max-h-[520px] overflow-auto whitespace-pre-wrap rounded-lg bg-gray-50 p-3 text-sm">
-            {state.result ?? "No output yet. Run a preset or custom task."}
-          </pre>
+          !isPending && (
+            <pre className="mt-3 max-h-[520px] overflow-auto whitespace-pre-wrap rounded-lg bg-gray-50 p-3 text-sm">
+              {state.result ?? "No output yet. Run a preset or custom task."}
+            </pre>
+          )
         )}
       </section>
     </div>
