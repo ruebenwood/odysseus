@@ -7,6 +7,7 @@ import type { OdysseusMode } from "@/lib/odysseus";
 type RunState = {
   result?: string;
   error?: string;
+  info?: string;
 };
 
 const PRESETS: Array<{
@@ -41,18 +42,56 @@ export default function OdysseusPage() {
   const [state, setState] = useState<RunState>({});
   const [task, setTask] = useState<string>("");
   const [mode, setMode] = useState<OdysseusMode>("build");
+  const [lastPrompt, setLastPrompt] = useState<string>("");
+  const [lastMode, setLastMode] = useState<OdysseusMode>("build");
 
-  async function run(taskText: string, modeVal: OdysseusMode) {
-    setState({});
-    startTransition(async () => {
-      try {
-        const out = await runOdysseusTask(taskText, { mode: modeVal });
-        setState({ result: out });
-      } catch (err: any) {
-        // Why: surface server action errors cleanly for debugging UX.
-        setState({ error: err?.message ?? "Unknown error" });
-      }
+  async function runWithFallback(taskText: string, modeVal: OdysseusMode) {
+    const trimmed = taskText.trim();
+    if (!trimmed) return;
+
+    setState({ info: "Running…" });
+    setLastPrompt(trimmed);
+    setLastMode(modeVal);
+
+    // 1) Try server action
+    try {
+      const out = await runOdysseusTask(trimmed, { mode: modeVal });
+      setState({ result: out });
+      return;
+    } catch (err: any) {
+      // Why: server actions might be disabled; fallback to API route.
+    }
+
+    // 2) Fallback to API route
+    try {
+      const res = await fetch("/api/odysseus", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ task: trimmed, mode: modeVal }),
+      });
+      const data = (await res.json()) as { result?: string; error?: string };
+      if (!res.ok) throw new Error(data.error || "API error");
+      setState({ result: data.result });
+    } catch (err: any) {
+      setState({ error: err?.message ?? "Unknown error" });
+    }
+  }
+
+  function run(taskText: string, modeVal: OdysseusMode) {
+    startTransition(() => {
+      void runWithFallback(taskText, modeVal);
     });
+  }
+
+  async function copy(text?: string) {
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setState((s) => ({ ...s, info: "Copied to clipboard." }));
+      setTimeout(() => setState((s) => ({ ...s, info: undefined })), 1200);
+    } catch {
+      setState((s) => ({ ...s, error: "Copy failed." }));
+    }
   }
 
   return (
@@ -62,7 +101,8 @@ export default function OdysseusPage() {
           Odysseus Presets
         </h1>
         <p className="text-sm text-gray-500">
-          One-click tasks for Lindy-style repo edits with Next.js + Expo.
+          One-click tasks for Lindy-style repo edits with Next.js + Expo. Falls
+          back to API route if server actions are unavailable.
         </p>
       </header>
 
@@ -127,7 +167,42 @@ export default function OdysseusPage() {
 
       {/* Output */}
       <section className="rounded-2xl border p-4 shadow-sm md:p-5">
-        <h3 className="text-base font-medium">Output</h3>
+        <div className="flex items-center justify-between">
+          <h3 className="text-base font-medium">Output</h3>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => copy(state.result)}
+              disabled={!state.result}
+              className="rounded-md border px-2 py-1 text-xs disabled:opacity-50"
+              title="Copy the model output"
+            >
+              Copy Output
+            </button>
+            <button
+              onClick={() => setTask(state.result ?? "")}
+              disabled={!state.result}
+              className="rounded-md border px-2 py-1 text-xs disabled:opacity-50"
+              title="Move output into the task editor"
+            >
+              Use Output as Task
+            </button>
+            <button
+              onClick={() => copy(lastPrompt ? `Mode: ${lastMode}\n\n${lastPrompt}` : "")}
+              disabled={!lastPrompt}
+              className="rounded-md border px-2 py-1 text-xs disabled:opacity-50"
+              title="Copy the last sent prompt"
+            >
+              Copy Sent Prompt
+            </button>
+          </div>
+        </div>
+
+        {state.info && (
+          <p className="mt-3 rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700">
+            {state.info}
+          </p>
+        )}
+
         {state.error ? (
           <p className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
             {state.error}

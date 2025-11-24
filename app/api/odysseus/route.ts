@@ -1,42 +1,34 @@
-import { NextRequest, NextResponse } from "next/server";
-import { runOdysseusTask, OdysseusMode } from "@/lib/odysseus";
+import { NextResponse } from "next/server";
+import { runOdysseusTask } from "@/lib/odysseus";
+import type { OdysseusMode } from "@/lib/odysseus";
 
-// Ensure this route runs in a Node.js runtime for external tool access and is never cached.
 export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
 
-export async function POST(req: NextRequest) {
+type Body = {
+  task?: string;
+  mode?: OdysseusMode;
+  extraInstructions?: string;
+};
+
+export async function POST(req: Request) {
   try {
-    const { task, mode } = await req.json();
-
-    if (!task || typeof task !== "string") {
+    const body = (await req.json()) as Body;
+    const task = (body.task ?? "").trim();
+    if (!task) {
       return NextResponse.json(
-        { error: "Missing or invalid 'task'." },
+        { error: "Task cannot be empty." },
         { status: 400 }
       );
     }
+    const mode: OdysseusMode = (body.mode as OdysseusMode) ?? "build";
+    const extraInstructions = body.extraInstructions;
 
-    const allowedModes: OdysseusMode[] = [
-      "build",
-      "design",
-      "refactor",
-      "analyze",
-      "deploy",
-      "api",
-      "mobile",
-    ];
-
-    const selectedMode: OdysseusMode = allowedModes.includes(mode)
-      ? mode
-      : "build";
-
-    const output = await runOdysseusTask(task, selectedMode);
-
-    return NextResponse.json({ output });
+    const result = await runOdysseusTask(task, { mode, extraInstructions });
+    return NextResponse.json({ result });
   } catch (err: any) {
-    console.error("Odysseus API error:", err);
+    // Why: ensure callers get a helpful message even on unexpected failures.
     return NextResponse.json(
-      { error: err?.message || "Unknown error" },
+      { error: err?.message ?? "Internal error" },
       { status: 500 }
     );
   }
