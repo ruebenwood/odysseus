@@ -1,6 +1,6 @@
 from __future__ import annotations
-from typing import Dict, Any, List
-from datetime import datetime, timedelta
+from typing import Dict, Any
+from ..providers import get_calendar
 
 class CalendarTool:
     name = "calendar"
@@ -17,30 +17,18 @@ class CalendarTool:
         },
         "required":["op"]
     }
-    _events: List[Dict[str, Any]] = []
-
     async def run(self, **kwargs) -> Dict[str, Any]:
         op = kwargs.get("op")
-        now = datetime.now().replace(minute=0, second=0, microsecond=0)
+        cal = get_calendar()
         if op == "find_slots":
-            # naive: every weekday 10:00–16:00, step 60m, skip existing
             dur = int(kwargs.get("duration_min", 30))
             days = int(kwargs.get("day_range", 7))
-            slots = []
-            for d in range(days):
-                day = now + timedelta(days=d)
-                if day.weekday() >= 5: continue
-                for h in range(10, 16):
-                    slot = day.replace(hour=h)
-                    clash = any(abs((slot - datetime.fromisoformat(e["start"])).total_seconds()) < 3600
-                                for e in self._events)
-                    if not clash:
-                        slots.append(slot.isoformat())
+            slots = await cal.find_slots(dur, days)
             return {"ok": True, "slots": slots[:10], "duration_min": dur}
         if op == "create_event":
             title = kwargs.get("title") or "Meeting"
             start = kwargs.get("start")
             if not start: return {"ok": False, "error":"start_required"}
-            self._events.append({"title": title, "start": start})
-            return {"ok": True, "event": {"title": title, "start": start}}
+            evt = await cal.create_event(title, start, kwargs.get("attendees") or [])
+            return evt
         return {"ok": False, "error": "bad_op"}
