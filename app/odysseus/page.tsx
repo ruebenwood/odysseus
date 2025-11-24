@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, useTransition } from "react";
-import { runOdysseusTask } from "@/lib/odysseus";
+import { runOdysseusTask, buildPrompt } from "@/lib/odysseus";
 import type { OdysseusMode } from "@/lib/odysseus";
 import {
   ENV_POSTHOG_KEY,
@@ -31,8 +31,7 @@ const BUILTIN_PRESETS: UIPreset[] = [
   {
     id: "expo",
     title: "New Expo app",
-    description:
-      "Scaffold an Expo + React Native app with bottom tabs and basic screens.",
+    description: "Scaffold an Expo + React Native app with bottom tabs and basic screens.",
     mode: "mobile",
     task:
       "Create an Expo app with a bottom tab navigator: Home, Activity, Profile. Home should show a feed card list; Activity shows recent events; Profile shows editable user info.",
@@ -41,17 +40,41 @@ const BUILTIN_PRESETS: UIPreset[] = [
   {
     id: "monorepo",
     title: "New web+mobile monorepo",
-    description:
-      "Set up Next.js (web) + Expo (mobile) in a single monorepo with shared packages.",
+    description: "Set up Next.js (web) + Expo (mobile) in a single monorepo with shared packages.",
     mode: "build",
     task:
       "Set up a monorepo with apps/web (Next.js) and apps/mobile (Expo). Share a UI component library in packages/ui and a shared types package in packages/types. Scaffold a simple home screen/page in both apps that uses the shared UI.",
+    builtin: true,
+  },
+  {
+    id: "next_dashboard",
+    title: "Next.js dashboard (filters + metrics)",
+    description: "Create a dashboard with sidebar navigation, filters, and a responsive metrics grid.",
+    mode: "build",
+    task:
+      "Create a Next.js dashboard with a persistent sidebar (links: Overview, Reports, Settings), a top toolbar with search and filter controls (date range, status), and a responsive metrics grid (cards for KPI tiles + a table). Include a sample API route that serves mock data and fetch on the client with SWR or React Query.",
+    builtin: true,
+  },
+  {
+    id: "expo_supabase_auth",
+    title: "Expo + Supabase auth",
+    description: "Expo app with Supabase auth: email magic link & OAuth, protected tabs, session store.",
+    mode: "mobile",
+    task:
+      "Create an Expo app integrated with Supabase auth. Include login/signup screens with email magic link and OAuth (e.g. Google), session persistence, and protected tabs (Home, Activity, Profile) behind auth. Add a minimal Supabase client wrapper, .env handling, and a sign-out action. Use Expo Router or React Navigation.",
     builtin: true,
   },
 ];
 
 const LS_PRESETS_KEY = "odysseus.presets";
 const LS_TELEMETRY_KEY = "odysseus.telemetry.enabled";
+const LS_DRYRUN_KEY = "odysseus.dryrun.enabled";
+
+type UIEvent = {
+  ts: number;
+  event: string;
+  props?: Record<string, any>;
+};
 
 function uid() {
   return Math.random().toString(36).slice(2, 10);
@@ -76,12 +99,6 @@ function writeCustomPresets(presets: UIPreset[]) {
   }
 }
 
-type UIEvent = {
-  ts: number;
-  event: string;
-  props?: Record<string, any>;
-};
-
 export default function OdysseusPage() {
   const [isPending, startTransition] = useTransition();
   const [state, setState] = useState<RunState>({});
@@ -93,16 +110,17 @@ export default function OdysseusPage() {
   const [lastMode, setLastMode] = useState<OdysseusMode>("build");
 
   const [telemetryEnabled, setTelemetryEnabled] = useState<boolean>(false);
-  const [events, setEvents] = useState<UIEvent[]>([]);
+  const [dryRun, setDryRun] = useState<boolean>(false);
 
+  const [events, setEvents] = useState<UIEvent[]>([]);
   const [customPresets, setCustomPresets] = useState<UIPreset[]>([]);
   const [showPresetModal, setShowPresetModal] = useState<boolean>(false);
   const [editing, setEditing] = useState<UIPreset | null>(null);
 
-  // Load toggles, events, presets
   useEffect(() => {
     try {
       setTelemetryEnabled(localStorage.getItem(LS_TELEMETRY_KEY) === "1");
+      setDryRun(localStorage.getItem(LS_DRYRUN_KEY) === "1");
     } catch {
       /* ignore */
     }
@@ -110,7 +128,6 @@ export default function OdysseusPage() {
     setCustomPresets(readCustomPresets());
   }, []);
 
-  // Init/teardown telemetry
   useEffect(() => {
     if (telemetryEnabled) {
       initTelemetry({ enabled: true });
@@ -120,7 +137,6 @@ export default function OdysseusPage() {
     }
   }, [telemetryEnabled]);
 
-  // Live telemetry feed
   useEffect(() => {
     const unsub = subscribeToEvents((e) => {
       setEvents((prev) => {
@@ -151,19 +167,37 @@ export default function OdysseusPage() {
     const trimmed = taskText.trim();
     if (!trimmed) return;
 
-    setState({ info: "Running…" });
+    setState({ info: dryRun ? "Dry-run preview…" : "Running…" });
     setLastPrompt(trimmed);
     setLastExtra(extraInstructions ?? "");
     setLastMode(modeVal);
+
+    if (dryRun) {
+      const prompt = buildPrompt({ task: trimmed, mode: modeVal, extraInstructions });
+      const preview = [
+        "DRY RUN (no repo edits performed)",
+        "",
+        "––– Prompt that would be sent –––",
+        prompt,
+      ].join("\n");
+      setState({ result: preview });
+      capture("odysseus_dry_run", {
+        mode: modeVal,
+        taskLen: trimmed.length,
+        extraLen: (extraInstructions ?? "").length,
+        presetId: presetId ?? null,
+      });
+      return;
+    }
 
     capture("odysseus_run_start", {
       mode: modeVal,
       taskLen: trimmed.length,
       extraLen: (extraInstructions ?? "").length,
       presetId: presetId ?? null,
+      dryRun,
     });
 
-    // 1) Try server action
     try {
       const out = await runOdysseusTask(trimmed, { mode: modeVal, extraInstructions });
       setState({ result: out });
@@ -171,13 +205,13 @@ export default function OdysseusPage() {
         mode: modeVal,
         via: "server_action",
         presetId: presetId ?? null,
+        dryRun,
       });
       return;
     } catch {
       /* fallthrough */
     }
 
-    // 2) API fallback
     try {
       const res = await fetch("/api/odysseus", {
         method: "POST",
@@ -191,6 +225,7 @@ export default function OdysseusPage() {
         mode: modeVal,
         via: "api_route",
         presetId: presetId ?? null,
+        dryRun,
       });
     } catch (err: any) {
       const msg = err?.message ?? "Unknown error";
@@ -199,16 +234,12 @@ export default function OdysseusPage() {
         mode: modeVal,
         presetId: presetId ?? null,
         error: msg.slice(0, 300),
+        dryRun,
       });
     }
   }
 
-  function run(
-    taskText: string,
-    modeVal: OdysseusMode,
-    extraInstructions?: string,
-    presetId?: string
-  ) {
+  function run(taskText: string, modeVal: OdysseusMode, extraInstructions?: string, presetId?: string) {
     startTransition(() => {
       void runWithFallback(taskText, modeVal, extraInstructions, presetId);
     });
@@ -234,11 +265,19 @@ export default function OdysseusPage() {
     }
   }
 
+  function toggleDryRun(next: boolean) {
+    setDryRun(next);
+    try {
+      localStorage.setItem(LS_DRYRUN_KEY, next ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  }
+
   function clearEvents() {
     setEvents([]);
   }
 
-  // Preset CRUD
   function openCreatePreset() {
     setEditing({
       id: "",
@@ -292,7 +331,16 @@ export default function OdysseusPage() {
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center">
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={dryRun}
+              onChange={(e) => toggleDryRun(e.target.checked)}
+            />
+            <span className="text-gray-700">Dry-run (no repo edits)</span>
+          </label>
+
           <button
             onClick={openCreatePreset}
             className="rounded-md border px-3 py-1.5 text-sm"
@@ -300,6 +348,7 @@ export default function OdysseusPage() {
           >
             Manage Presets
           </button>
+
           <label className="flex items-center gap-2 text-sm">
             <input
               type="checkbox"
@@ -314,13 +363,14 @@ export default function OdysseusPage() {
       {missingKeyBanner && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
           {missingKeyBanner} Example:
-          <pre className="mt-2 rounded bg-white p-2 text-xs">{`# .env.local
+          <pre className="mt-2 rounded bg-white p-2 text-xs">
+{`# .env.local
 NEXT_PUBLIC_POSTHOG_KEY=phc_***
-NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}</pre>
+NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}
+          </pre>
         </div>
       )}
 
-      {/* Presets */}
       <section className="grid gap-4 md:grid-cols-2">
         {allPresets.map((p) => (
           <div key={p.id} className="rounded-2xl border p-4 text-left shadow-sm md:p-5">
@@ -358,14 +408,13 @@ NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}</pre>
                 disabled={isPending}
                 className="rounded-lg bg-black px-3 py-2 text-xs font-medium text-white disabled:opacity-60"
               >
-                {isPending ? "Running…" : "Run preset"}
+                {isPending ? (dryRun ? "Previewing…" : "Running…") : dryRun ? "Preview prompt" : "Run preset"}
               </button>
             </div>
           </div>
         ))}
       </section>
 
-      {/* Freeform runner */}
       <section className="rounded-2xl border p-4 shadow-sm md:p-5">
         <h3 className="text-base font-medium">Custom task</h3>
         <div className="mt-3 grid gap-3">
@@ -402,13 +451,12 @@ NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}</pre>
               disabled={isPending || !canRun}
               className="ml-auto rounded-lg bg-black px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
             >
-              {isPending ? "Running…" : "Run task"}
+              {isPending ? (dryRun ? "Previewing…" : "Running…") : dryRun ? "Preview prompt" : "Run task"}
             </button>
           </div>
         </div>
       </section>
 
-      {/* Output */}
       <section className="rounded-2xl border p-4 shadow-sm md:p-5">
         <div className="flex items-center justify-between">
           <h3 className="text-base font-medium">Output</h3>
@@ -432,8 +480,8 @@ NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}</pre>
             <button
               onClick={() =>
                 copy(
-                  lastPrompt || lastExtra
-                    ? `Mode: ${lastMode}\n\nTask:\n${lastPrompt}\n\nExtra Instructions:\n${lastExtra}`
+                  (lastPrompt || lastExtra)
+                    ? `Mode: ${lastMode}\n\nTask:\n${lastPrompt}\n\nExtra Instructions:\n${lastExtra}\n\nDryRun: ${dryRun}`
                     : ""
                 )
               }
@@ -475,7 +523,6 @@ NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}</pre>
         )}
       </section>
 
-      {/* Events table */}
       <section className="rounded-2xl border p-4 shadow-sm md:p-5">
         <div className="mb-2 flex items-center justify-between">
           <h3 className="text-base font-medium">Recent analytics events</h3>
@@ -521,7 +568,6 @@ NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}</pre>
         )}
       </section>
 
-      {/* Preset Editor Modal */}
       {showPresetModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
           <div className="absolute inset-0 bg-black/40" onClick={() => setShowPresetModal(false)} />
@@ -595,16 +641,10 @@ NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}</pre>
                         <div className="text-xs text-gray-500">{p.mode.toUpperCase()}</div>
                       </div>
                       <div className="flex items-center gap-2">
-                        <button
-                          className="rounded border px-2 py-1 text-xs"
-                          onClick={() => openEditPreset(p)}
-                        >
+                        <button className="rounded border px-2 py-1 text-xs" onClick={() => openEditPreset(p)}>
                           Edit
                         </button>
-                        <button
-                          className="rounded border px-2 py-1 text-xs"
-                          onClick={() => removePreset(p.id)}
-                        >
+                        <button className="rounded border px-2 py-1 text-xs" onClick={() => removePreset(p.id)}>
                           Delete
                         </button>
                       </div>
