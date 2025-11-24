@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, useTransition } from "react";
-import { runOdysseusTask, buildPrompt } from "@/lib/odysseus";
+import { buildPrompt, runOdysseusTask } from "@/lib/odysseus";
 import type { OdysseusMode } from "@/lib/odysseus";
 import {
   ENV_POSTHOG_KEY,
@@ -12,8 +12,11 @@ import {
   subscribeToEvents,
 } from "@/lib/telemetry";
 
+/** -------------------------------------------------
+ * Types
+ * --------------------------------------------------*/
 type RunState = { result?: string; error?: string; info?: string };
-
+type UIEvent = { ts: number; event: string; props?: Record<string, any> };
 type UIPreset = {
   id: string;
   title: string;
@@ -22,7 +25,21 @@ type UIPreset = {
   task: string;
   builtin?: boolean;
 };
+type ScaffoldMap = Record<string, string>;
 
+/** -------------------------------------------------
+ * LocalStorage keys
+ * --------------------------------------------------*/
+const LS_PRESETS_KEY = "odysseus.presets";
+const LS_TELEMETRY_KEY = "odysseus.telemetry.enabled";
+const LS_DRYRUN_KEY = "odysseus.dryrun.enabled";
+const LS_REPO_URL_KEY = "odysseus.repo.url";
+const LS_REPO_INCLUDE_KEY = "odysseus.repo.include";
+const LS_LAST_PLAN_KEY = "odysseus.last.plan";
+
+/** -------------------------------------------------
+ * Built-in presets (previous plus extras)
+ * --------------------------------------------------*/
 const BUILTIN_PRESETS: UIPreset[] = [
   {
     id: "expo",
@@ -63,8 +80,7 @@ const BUILTIN_PRESETS: UIPreset[] = [
   {
     id: "expo_router_supabase_magiclink",
     title: "Expo Router + Supabase (magic link + deep links)",
-    description:
-      "Expo Router app with Supabase magic-link auth and configured deep links (iOS/Android/Dev).",
+    description: "Expo Router app with Supabase magic-link auth and configured deep links (iOS/Android/Dev).",
     mode: "mobile",
     task:
       "Create an Expo Router app integrated with Supabase auth using magic link and OAuth. Configure deep links and linking so the magic-link flow returns to the app. Include (a) app.config.ts with scheme and link prefixes, (b) auth screens (/login, /callback), (c) session persistence, (d) protected routes (/(tabs)/home, /(tabs)/activity, /(tabs)/profile), and (e) a Supabase client in src/lib/supabase.ts using EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_ANON_KEY.",
@@ -73,8 +89,7 @@ const BUILTIN_PRESETS: UIPreset[] = [
   {
     id: "next_supabase_guard",
     title: "Next.js + Supabase (client + route guard)",
-    description:
-      "Supabase client for web, auth pages, middleware to protect /app routes, and session utilities.",
+    description: "Supabase client for web, auth pages, middleware to protect /app routes, and session utilities.",
     mode: "build",
     task:
       "In a Next.js app, add Supabase auth with a client helper, server-side session utilities, and middleware to protect /app routes. Include pages: /login (email magic link & OAuth), /app (protected), and an API route to get current user. Use NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY.",
@@ -82,37 +97,9 @@ const BUILTIN_PRESETS: UIPreset[] = [
   },
 ];
 
-const LS_PRESETS_KEY = "odysseus.presets";
-const LS_TELEMETRY_KEY = "odysseus.telemetry.enabled";
-const LS_DRYRUN_KEY = "odysseus.dryrun.enabled";
-
-type UIEvent = { ts: number; event: string; props?: Record<string, any> };
-
-type ScaffoldMap = Record<string, string>;
-
-function readCustomPresets(): UIPreset[] {
-  try {
-    const raw = localStorage.getItem(LS_PRESETS_KEY);
-    if (!raw) return [];
-    const arr = JSON.parse(raw) as UIPreset[];
-    return Array.isArray(arr) ? arr.filter((p) => !!p.id && !p.builtin) : [];
-  } catch {
-    return [];
-  }
-}
-
-function writeCustomPresets(presets: UIPreset[]) {
-  try {
-    localStorage.setItem(LS_PRESETS_KEY, JSON.stringify(presets));
-  } catch {
-    /* ignore */
-  }
-}
-
-function uid() {
-  return Math.random().toString(36).slice(2, 10);
-}
-
+/** -------------------------------------------------
+ * Supabase scaffold helpers
+ * --------------------------------------------------*/
 function makeSupabaseScaffolds(kind: "router" | "tabs" = "router"): ScaffoldMap {
   const env = `# .env.local.example
 # Supabase project settings
@@ -122,7 +109,6 @@ EXPO_PUBLIC_SUPABASE_ANON_KEY=YOUR-ANON-KEY
 # Deep link scheme (adjust as needed)
 EXPO_PUBLIC_SCHEME=odysseus
 EXPO_PUBLIC_DEEP_LINKS=odysseus://,https://odysseus.example.app`;
-
   const supabaseClient = `// apps/mobile/src/lib/supabase.ts
 import 'react-native-url-polyfill/auto';
 import { createClient } from '@supabase/supabase-js';
@@ -131,29 +117,19 @@ const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL!;
 const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY!;
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-  auth: {
-    autoRefreshToken: true,
-    persistSession: true,
-    detectSessionInUrl: false,
-  },
+  auth: { autoRefreshToken: true, persistSession: true, detectSessionInUrl: false },
 });`;
-
   const appConfigRouter = `// apps/mobile/app.config.ts
 import { ConfigContext, ExpoConfig } from '@expo/config';
-
 export default ({ config }: ConfigContext): ExpoConfig => {
   const scheme = process.env.EXPO_PUBLIC_SCHEME || 'odysseus';
   const links = (process.env.EXPO_PUBLIC_DEEP_LINKS || \`${scheme}://\`).split(',');
-
   return {
     ...config,
     name: 'Odysseus Mobile',
     slug: 'odysseus-mobile',
     scheme,
-    ios: {
-      supportsTablet: true,
-      bundleIdentifier: 'com.example.odysseus',
-    },
+    ios: { supportsTablet: true, bundleIdentifier: 'com.example.odysseus' },
     android: {
       package: 'com.example.odysseus',
       intentFilters: [
@@ -168,45 +144,34 @@ export default ({ config }: ConfigContext): ExpoConfig => {
         },
       ],
     },
-    extra: {
-      router: 'expo-router',
-    },
+    extra: { router: 'expo-router' },
     experiments: { typedRoutes: true },
   };
 };`;
-
   const authCallbackRouter = `// apps/mobile/app/(auth)/callback.tsx
 import { useEffect } from 'react';
 import { Text, View } from 'react-native';
-import * as Linking from 'expo-linking';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { supabase } from '../../src/lib/supabase';
 
 export default function Callback() {
   const router = useRouter();
   const params = useLocalSearchParams();
-
   useEffect(() => {
-    const url = Linking.useURL();
     const handle = async () => {
       const {
         data: { session },
-        error,
       } = await supabase.auth.getSession();
-      if (!error && session) {
-        router.replace('/(tabs)/home');
-      }
+      if (session) router.replace('/(tabs)/home');
     };
     handle();
   }, [params]);
-
   return (
     <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
       <Text>Completing sign-in…</Text>
     </View>
   );
 }`;
-
   const loginRouter = `// apps/mobile/app/(auth)/login.tsx
 import { useState } from 'react';
 import { View, TextInput, Text, Pressable } from 'react-native';
@@ -260,7 +225,6 @@ export default function Login() {
     </View>
   );
 }`;
-
   const tabsLayout = `// apps/mobile/app/(tabs)/_layout.tsx
 import { Tabs, Slot } from 'expo-router';
 import { useEffect, useState } from 'react';
@@ -275,17 +239,12 @@ export default function Layout() {
       setAuthed(!!session);
       setReady(true);
     });
-    const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => {
-      setAuthed(!!session);
-    });
+    const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => setAuthed(!!session));
     return () => sub.subscription?.unsubscribe();
   }, []);
 
   if (!ready) return null;
-
-  if (!authed) {
-    return <Slot initialRouteName="(auth)/login" />;
-  }
+  if (!authed) return <Slot initialRouteName="(auth)/login" />;
 
   return (
     <Tabs>
@@ -295,14 +254,16 @@ export default function Layout() {
     </Tabs>
   );
 }`;
-
   const simpleScreen = (name: string) => `// apps/mobile/app/(tabs)/${name}.tsx
 import { View, Text } from 'react-native';
 export default function ${name[0].toUpperCase() + name.slice(1)}() {
-  return <View style={{ flex:1, alignItems:'center', justifyContent:'center' }}><Text>${name} screen</Text></View>;
+  return (
+    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+      <Text>${name} screen</Text>
+    </View>
+  );
 }`;
-
-  const routerFiles: ScaffoldMap = {
+  return {
     "apps/mobile/src/lib/supabase.ts": supabaseClient,
     "apps/mobile/app.config.ts": appConfigRouter,
     "apps/mobile/app/(auth)/login.tsx": loginRouter,
@@ -313,12 +274,9 @@ export default function ${name[0].toUpperCase() + name.slice(1)}() {
     "apps/mobile/app/(tabs)/profile.tsx": simpleScreen("profile"),
     ".env.local.example": env,
   };
-
-  if (kind === "router") return routerFiles;
-  return routerFiles;
 }
 
-function makeWebSupabaseScaffolds(): ScaffoldMap {
+function makeWebSupabaseScaffolds(): Record<string, string> {
   return {
     "apps/web/.env.local.example": `NEXT_PUBLIC_SUPABASE_URL=https://YOUR-PROJECT.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=YOUR-ANON-KEY`,
@@ -330,7 +288,6 @@ export const supabaseBrowser = () =>
   );`,
     "apps/web/middleware.ts": `import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
-
 export function middleware(req: NextRequest) {
   const session = req.cookies.get('sb-session')?.value;
   const isProtected = req.nextUrl.pathname.startsWith('/app');
@@ -342,12 +299,22 @@ export function middleware(req: NextRequest) {
   }
   return NextResponse.next();
 }
-
 export const config = { matcher: ['/app/:path*'] };`,
   };
 }
 
-function scaffoldWebExtraInstructions(map: ScaffoldMap): string {
+function scaffoldExtraInstructions(files: ScaffoldMap): string {
+  const parts = Object.entries(files).map(
+    ([path, content]) => `Create or overwrite file: \`${path}\`\n\n\`\`\`\n${content}\n\`\`\``
+  );
+  return [
+    "Additionally, create the following files with *exact* contents:",
+    parts.join("\n\n"),
+    "Ensure builds succeed.",
+  ].join("\n\n");
+}
+
+function scaffoldWebExtraInstructions(map: Record<string, string>): string {
   return [
     "Additionally, create these Next.js web files with exact contents:",
     ...Object.entries(map).map(
@@ -356,24 +323,57 @@ function scaffoldWebExtraInstructions(map: ScaffoldMap): string {
   ].join("\n\n");
 }
 
-function scaffoldExtraInstructions(files: ScaffoldMap): string {
-  const parts = Object.entries(files).map(
-    ([path, content]) =>
-      `Create or overwrite file: \`${path}\`\n\n\`\`\`\n${content}\n\`\`\``
-  );
-  return [
-    "Additionally, create the following files with *exact* contents:",
-    parts.join("\n\n"),
-    "Ensure app builds and deep links are wired for magic link callback.",
-  ].join("\n\n");
+/** -------------------------------------------------
+ * Utility helpers
+ * --------------------------------------------------*/
+function readCustomPresets(): UIPreset[] {
+  try {
+    const raw = localStorage.getItem(LS_PRESETS_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw) as UIPreset[];
+    return Array.isArray(arr) ? arr.filter((p) => !!p.id && !p.builtin) : [];
+  } catch {
+    return [];
+  }
 }
 
+function writeCustomPresets(presets: UIPreset[]) {
+  try {
+    localStorage.setItem(LS_PRESETS_KEY, JSON.stringify(presets));
+  } catch {
+    /* ignore */
+  }
+}
+
+function uid() {
+  return Math.random().toString(36).slice(2, 10);
+}
+
+function parsePlannedFiles(planText: string): string[] {
+  const paths = new Set<string>();
+  const codeFenceRegex = /`{1,3}([^`\n]+)`{1,3}/g;
+  const bulletRegex = /(?:^|\n)\s*(?:-|\*)\s+(?:Create|Modify|Update|Touch|Add)\s+(?:file|files|):?\s*`([^`]+)`/gi;
+  const inlinePath = /(?:^|\s)([A-Za-z0-9_\-./]+\/[A-Za-z0-9_\-./]+\.[A-Za-z0-9]+)/g;
+
+  let m: RegExpExecArray | null;
+  while ((m = codeFenceRegex.exec(planText))) {
+    const t = m[1].trim();
+    if (t.includes("/") && t.split("/").pop()?.includes(".")) paths.add(t);
+  }
+  while ((m = bulletRegex.exec(planText))) paths.add(m[1].trim());
+  while ((m = inlinePath.exec(planText))) paths.add(m[1].trim());
+
+  return Array.from(paths).slice(0, 200);
+}
+
+/** -------------------------------------------------
+ * Vercel helper panel
+ * --------------------------------------------------*/
 function VercelPanel() {
   const [token, setToken] = useState<string>("");
   const [name, setName] = useState<string>("odysseus-web");
   const [teamId, setTeamId] = useState<string>("");
   const [projectIdOrName, setProjectIdOrName] = useState<string>("");
-
   const [envsText, setEnvsText] = useState<string>(`NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_ANON_KEY=
 EXPO_PUBLIC_SUPABASE_URL=
@@ -504,13 +504,16 @@ EXPO_PUBLIC_SUPABASE_ANON_KEY=
         </button>
 
         <p className="text-xs text-gray-500">
-          Token is passed via header to API routes; server falls back to VERCEL_TOKEN env if header is absent.
+          Token sent via header to API routes; server falls back to VERCEL_TOKEN env if header is absent.
         </p>
       </div>
     </section>
   );
 }
 
+/** -------------------------------------------------
+ * Component
+ * --------------------------------------------------*/
 export default function OdysseusPage() {
   const [isPending, startTransition] = useTransition();
   const [state, setState] = useState<RunState>({});
@@ -523,7 +526,6 @@ export default function OdysseusPage() {
 
   const [telemetryEnabled, setTelemetryEnabled] = useState<boolean>(false);
   const [dryRun, setDryRun] = useState<boolean>(false);
-
   const [events, setEvents] = useState<UIEvent[]>([]);
   const [customPresets, setCustomPresets] = useState<UIPreset[]>([]);
   const [showPresetModal, setShowPresetModal] = useState<boolean>(false);
@@ -532,11 +534,24 @@ export default function OdysseusPage() {
   const [scaffolds, setScaffolds] = useState<ScaffoldMap | null>(null);
   const [lastPresetId, setLastPresetId] = useState<string | null>(null);
 
+  const [repoUrl, setRepoUrl] = useState<string>("");
+  const [includeRepoInPrompt, setIncludeRepoInPrompt] = useState<boolean>(true);
+
+  const [lastPlanText, setLastPlanText] = useState<string>("");
+  const [plannedFiles, setPlannedFiles] = useState<string[]>([]);
+
   useEffect(() => {
     try {
       setTelemetryEnabled(localStorage.getItem(LS_TELEMETRY_KEY) === "1");
       setDryRun(localStorage.getItem(LS_DRYRUN_KEY) === "1");
-    } catch {}
+      setRepoUrl(localStorage.getItem(LS_REPO_URL_KEY) || "");
+      setIncludeRepoInPrompt((localStorage.getItem(LS_REPO_INCLUDE_KEY) ?? "1") === "1");
+      const plan = localStorage.getItem(LS_LAST_PLAN_KEY) || "";
+      setLastPlanText(plan);
+      if (plan) setPlannedFiles(parsePlannedFiles(plan));
+    } catch {
+      /* ignore */
+    }
     setEvents(getRecentEvents());
     setCustomPresets(readCustomPresets());
   }, []);
@@ -572,9 +587,17 @@ export default function OdysseusPage() {
   );
 
   const isSupabasePreset = (id?: string | null) =>
-    id === "expo_supabase_auth" ||
-    id === "expo_router_supabase_magiclink" ||
-    id === "next_supabase_guard";
+    id === "expo_supabase_auth" || id === "expo_router_supabase_magiclink" || id === "next_supabase_guard";
+
+  function composeRepoExtra(): string {
+    if (!includeRepoInPrompt || !repoUrl.trim()) return "";
+    return [
+      "Repository metadata:",
+      `- GitHub repo URL: ${repoUrl.trim()}`,
+      "- If deploying to Vercel, set up Git integration for this repository.",
+      "- Ensure environment variables are created on Vercel for both Production and Preview targets.",
+    ].join("\n");
+  }
 
   async function runWithFallback(
     taskText: string,
@@ -585,25 +608,27 @@ export default function OdysseusPage() {
     const trimmed = taskText.trim();
     if (!trimmed) return;
 
-    let selectedScaffolds: ScaffoldMap | null = null;
-    if (presetId === "next_supabase_guard") {
-      selectedScaffolds = makeWebSupabaseScaffolds();
-    } else if (isSupabasePreset(presetId)) {
-      selectedScaffolds = makeSupabaseScaffolds(
-        presetId === "expo_router_supabase_magiclink" ? "router" : "tabs"
-      );
+    let supaScaffolds: ScaffoldMap | null = null;
+    if (isSupabasePreset(presetId)) {
+      supaScaffolds =
+        presetId === "next_supabase_guard" ? makeWebSupabaseScaffolds() : makeSupabaseScaffolds("router");
+      setScaffolds(supaScaffolds);
+      setLastPresetId(presetId ?? null);
+    } else {
+      setScaffolds(null);
+      setLastPresetId(presetId ?? null);
     }
 
-    setScaffolds(selectedScaffolds);
-    setLastPresetId(presetId ?? null);
-
-    let effectiveExtra = (extraInstructions ?? "").trim();
-    if (selectedScaffolds && !dryRun) {
-      const scaffoldNotes =
+    let effectiveExtra = [extraInstructions?.trim(), composeRepoExtra()].filter(Boolean).join("\n\n");
+    if (supaScaffolds && !dryRun) {
+      effectiveExtra = [
+        effectiveExtra,
         presetId === "next_supabase_guard"
-          ? scaffoldWebExtraInstructions(selectedScaffolds)
-          : scaffoldExtraInstructions(selectedScaffolds);
-      effectiveExtra = [effectiveExtra, scaffoldNotes].filter(Boolean).join("\n\n");
+          ? scaffoldWebExtraInstructions(supaScaffolds as Record<string, string>)
+          : scaffoldExtraInstructions(supaScaffolds),
+      ]
+        .filter(Boolean)
+        .join("\n\n");
     }
 
     setState({ info: dryRun ? "Dry-run preview…" : "Running…" });
@@ -618,36 +643,23 @@ export default function OdysseusPage() {
         "",
         "––– Prompt that would be sent –––",
         prompt,
-        "",
-        selectedScaffolds ? "––– Scaffolds (download below or let Odysseus write them) –––" : "",
       ].join("\n");
       setState({ result: preview });
-      capture("odysseus_dry_run", {
-        mode: modeVal,
-        taskLen: trimmed.length,
-        extraLen: effectiveExtra.length,
-        presetId: presetId ?? null,
-      });
+      capture("odysseus_dry_run", { mode: modeVal, presetId: presetId ?? null });
       return;
     }
 
     capture("odysseus_run_start", {
       mode: modeVal,
       taskLen: trimmed.length,
-      extraLen: effectiveExtra.length,
       presetId: presetId ?? null,
-      dryRun,
+      hasRepo: !!repoUrl.trim(),
     });
 
     try {
       const out = await runOdysseusTask(trimmed, { mode: modeVal, extraInstructions: effectiveExtra });
       setState({ result: out });
-      capture("odysseus_run_success", {
-        mode: modeVal,
-        via: "server_action",
-        presetId: presetId ?? null,
-        dryRun,
-      });
+      capture("odysseus_run_success", { mode: modeVal, via: "server_action", presetId: presetId ?? null });
       return;
     } catch {
       /* fallthrough */
@@ -662,21 +674,11 @@ export default function OdysseusPage() {
       const data = (await res.json()) as { result?: string; error?: string };
       if (!res.ok) throw new Error(data.error || "API error");
       setState({ result: data.result });
-      capture("odysseus_run_success", {
-        mode: modeVal,
-        via: "api_route",
-        presetId: presetId ?? null,
-        dryRun,
-      });
+      capture("odysseus_run_success", { mode: modeVal, via: "api_route", presetId: presetId ?? null });
     } catch (err: any) {
       const msg = err?.message ?? "Unknown error";
       setState({ error: msg });
-      capture("odysseus_run_error", {
-        mode: modeVal,
-        presetId: presetId ?? null,
-        error: msg.slice(0, 300),
-        dryRun,
-      });
+      capture("odysseus_run_error", { mode: modeVal, presetId: presetId ?? null, error: msg.slice(0, 300) });
     }
   }
 
@@ -686,21 +688,23 @@ export default function OdysseusPage() {
     });
   }
 
-  function writeScaffoldsToRepo(scaffoldMap: ScaffoldMap) {
-    const taskLines = Object.keys(scaffoldMap).map(
-      (path) => `- Create or overwrite: ${path}`
-    );
-    const task = [
-      "Create ONLY the following files in the repo (no other changes):",
-      ...taskLines,
-    ].join("\n");
+  function saveRepoUrl(next: string) {
+    setRepoUrl(next);
+    try {
+      localStorage.setItem(LS_REPO_URL_KEY, next);
+    } catch {
+      /* ignore */
+    }
+    capture("odysseus_repo_url_set", { hasUrl: !!next.trim() });
+  }
 
-    const extras =
-      lastPresetId === "next_supabase_guard"
-        ? scaffoldWebExtraInstructions(scaffoldMap)
-        : scaffoldExtraInstructions(scaffoldMap);
-
-    run(task, "build", extras, "scaffolds_write_now");
+  function toggleIncludeRepo(next: boolean) {
+    setIncludeRepoInPrompt(next);
+    try {
+      localStorage.setItem(LS_REPO_INCLUDE_KEY, next ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
   }
 
   async function copy(text?: string) {
@@ -712,20 +716,6 @@ export default function OdysseusPage() {
     } catch {
       setState((s) => ({ ...s, error: "Copy failed." }));
     }
-  }
-
-  function toggleTelemetry(next: boolean) {
-    setTelemetryEnabled(next);
-    try {
-      localStorage.setItem(LS_TELEMETRY_KEY, next ? "1" : "0");
-    } catch {}
-  }
-
-  function toggleDryRun(next: boolean) {
-    setDryRun(next);
-    try {
-      localStorage.setItem(LS_DRYRUN_KEY, next ? "1" : "0");
-    } catch {}
   }
 
   function clearEvents() {
@@ -753,7 +743,7 @@ export default function OdysseusPage() {
   function savePreset() {
     if (!editing) return;
     const isNew = !editing.id;
-    const draft = { ...editing } as UIPreset;
+    const draft = { ...editing };
     if (isNew) draft.id = `custom_${uid()}`;
 
     const next = [...customPresets.filter((p) => p.id !== draft.id), draft];
@@ -768,6 +758,63 @@ export default function OdysseusPage() {
     });
   }
 
+  async function planEdits() {
+    const trimmed = task.trim();
+    if (!trimmed) return;
+
+    setState({ info: "Planning (no edits)…" });
+    const planExtra = [
+      "IMPORTANT: Do NOT edit the repo.",
+      "Output ONLY a build plan with:",
+      "- bullet list of files to create/modify (use backticks around full paths)",
+      "- brief rationale per file (1–2 lines)",
+      "- any commands to run (code block)",
+    ].join("\n");
+
+    try {
+      const out = await runOdysseusTask(trimmed, {
+        mode: "analyze",
+        extraInstructions: [composeRepoExtra(), planExtra].filter(Boolean).join("\n\n"),
+      });
+      setState({ result: out });
+      setLastPlanText(out);
+      localStorage.setItem(LS_LAST_PLAN_KEY, out);
+      const files = parsePlannedFiles(out);
+      setPlannedFiles(files);
+      capture("odysseus_plan_success", { files: files.length });
+    } catch (err: any) {
+      setState({ error: err?.message ?? "Plan failed" });
+      capture("odysseus_plan_error", {});
+    }
+  }
+
+  function applyPlan() {
+    if (plannedFiles.length === 0) {
+      setState({ error: "No planned files found. Run Plan first." });
+      return;
+    }
+    const filesList = plannedFiles.map((p) => `- ${p}`).join("\n");
+    const guardedTask = [
+      "Apply the previously planned changes.",
+      "Create/modify ONLY these files (no other files):",
+      filesList,
+    ].join("\n");
+    const guardExtra = [
+      "IMPORTANT: Do not introduce edits outside the listed files.",
+      "If a file is missing from the list but required, STOP and report.",
+    ].join("\n");
+    run(guardedTask, "build", [extra, guardExtra, composeRepoExtra()].filter(Boolean).join("\n\n"), "apply_plan");
+  }
+
+  function writeScaffoldsToRepo(sc: Record<string, string>) {
+    const taskLines = Object.keys(sc)
+      .map((p) => `- ${p}`)
+      .join("\n");
+    const taskText = ["Create ONLY the following files in the repo:", taskLines].join("\n");
+    const extraText = scaffoldExtraInstructions(sc);
+    run(taskText, "build", [extra, composeRepoExtra(), extraText].filter(Boolean).join("\n\n"), "scaffolds_write_now");
+  }
+
   function downloadFile(path: string, content: string) {
     const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
     const url = URL.createObjectURL(blob);
@@ -780,9 +827,8 @@ export default function OdysseusPage() {
     URL.revokeObjectURL(url);
   }
 
-  function downloadAllScaffolds() {
-    if (!scaffolds) return;
-    Object.entries(scaffolds).forEach(([path, content]) => downloadFile(path, content));
+  function downloadAllScaffolds(sc: Record<string, string>) {
+    Object.entries(sc).forEach(([path, content]) => downloadFile(path, content));
   }
 
   return (
@@ -797,7 +843,18 @@ export default function OdysseusPage() {
 
         <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center">
           <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={dryRun} onChange={(e) => toggleDryRun(e.target.checked)} />
+            <input
+              type="checkbox"
+              checked={dryRun}
+              onChange={(e) => {
+                setDryRun(e.target.checked);
+                try {
+                  localStorage.setItem(LS_DRYRUN_KEY, e.target.checked ? "1" : "0");
+                } catch {
+                  /* ignore */
+                }
+              }}
+            />
             <span className="text-gray-700">Dry-run (no repo edits)</span>
           </label>
 
@@ -813,7 +870,14 @@ export default function OdysseusPage() {
             <input
               type="checkbox"
               checked={telemetryEnabled}
-              onChange={(e) => toggleTelemetry(e.target.checked)}
+              onChange={(e) => {
+                setTelemetryEnabled(e.target.checked);
+                try {
+                  localStorage.setItem(LS_TELEMETRY_KEY, e.target.checked ? "1" : "0");
+                } catch {
+                  /* ignore */
+                }
+              }}
             />
             <span className="text-gray-600">Analytics (PostHog)</span>
           </label>
@@ -828,6 +892,26 @@ NEXT_PUBLIC_POSTHOG_KEY=phc_***
 NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}</pre>
         </div>
       )}
+
+      <section className="rounded-2xl border p-4 shadow-sm md:p-5">
+        <h3 className="text-base font-medium">GitHub Repo Connect</h3>
+        <div className="mt-3 grid gap-3">
+          <input
+            className="rounded-md border p-2 text-sm"
+            placeholder="https://github.com/owner/repo"
+            value={repoUrl}
+            onChange={(e) => saveRepoUrl(e.target.value)}
+          />
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={includeRepoInPrompt}
+              onChange={(e) => toggleIncludeRepo(e.target.checked)}
+            />
+            <span>Include repo metadata in prompt (helps Vercel Git integration)</span>
+          </label>
+        </div>
+      </section>
 
       <section className="grid gap-4 md:grid-cols-2">
         {allPresets.map((p) => (
@@ -852,13 +936,22 @@ NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}</pre>
             <pre className="mt-3 line-clamp-3 whitespace-pre-wrap rounded-lg bg-gray-50 p-3 text-xs text-gray-700">
               {p.task}
             </pre>
-            <div className="mt-3">
+            <div className="mt-3 flex gap-2">
               <button
                 onClick={() => run(p.task, p.mode, undefined, p.id)}
                 disabled={isPending}
                 className="rounded-lg bg-black px-3 py-2 text-xs font-medium text-white disabled:opacity-60"
               >
                 {isPending ? (dryRun ? "Previewing…" : "Running…") : dryRun ? "Preview prompt" : "Run preset"}
+              </button>
+              <button
+                onClick={() => {
+                  setTask(p.task);
+                  setMode(p.mode);
+                }}
+                className="rounded-lg border px-3 py-2 text-xs"
+              >
+                Load into editor
               </button>
             </div>
           </div>
@@ -881,7 +974,7 @@ NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}</pre>
             placeholder="Repo-specific notes, constraints, or temporary overrides."
             className="min-h-[80px] w-full rounded-lg border p-3 text-sm"
           />
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <label className="text-sm text-gray-600">Mode</label>
             <select
               value={mode}
@@ -903,7 +996,39 @@ NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}</pre>
             >
               {isPending ? (dryRun ? "Previewing…" : "Running…") : dryRun ? "Preview prompt" : "Run task"}
             </button>
+            <button onClick={planEdits} disabled={!canRun || isPending} className="rounded-lg border px-3 py-2 text-sm">
+              Plan (no edits)
+            </button>
+            <button
+              onClick={applyPlan}
+              disabled={plannedFiles.length === 0 || isPending}
+              className="rounded-lg border px-3 py-2 text-sm"
+            >
+              Apply Plan
+            </button>
           </div>
+          {lastPlanText && (
+            <details className="rounded-lg border p-3">
+              <summary className="cursor-pointer text-sm font-medium">
+                Last plan (parsed {plannedFiles.length} files)
+              </summary>
+              <div className="mt-3 grid gap-2">
+                <pre className="max-h-[220px] overflow-auto whitespace-pre-wrap rounded bg-gray-50 p-2 text-xs">
+                  {lastPlanText}
+                </pre>
+                {plannedFiles.length > 0 && (
+                  <div className="rounded border p-2">
+                    <div className="mb-1 text-xs font-medium">Planned files</div>
+                    <ul className="text-xs">
+                      {plannedFiles.map((p) => (
+                        <li key={p}>• {p}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            </details>
+          )}
         </div>
       </section>
 
@@ -930,7 +1055,7 @@ NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}</pre>
             <button
               onClick={() =>
                 copy(
-                  (lastPrompt || lastExtra)
+                  lastPrompt || lastExtra
                     ? `Mode: ${lastMode}\n\nTask:\n${lastPrompt}\n\nExtra Instructions:\n${lastExtra}\n\nDryRun: ${dryRun}`
                     : ""
                 )
@@ -986,11 +1111,14 @@ NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}</pre>
                 : "Expo + Supabase"}
             </h3>
             <div className="flex items-center gap-2">
-              <button onClick={downloadAllScaffolds} className="rounded-md border px-2 py-1 text-xs">
+              <button
+                onClick={() => downloadAllScaffolds(scaffolds)}
+                className="rounded-md border px-2 py-1 text-xs"
+              >
                 Download all
               </button>
               <button
-                onClick={() => scaffolds && writeScaffoldsToRepo(scaffolds)}
+                onClick={() => writeScaffoldsToRepo(scaffolds)}
                 className="rounded-md bg-black px-2 py-1 text-xs text-white"
               >
                 Write scaffolds to repo now
@@ -998,8 +1126,7 @@ NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}</pre>
             </div>
           </div>
           <p className="text-xs text-gray-600">
-            Use these files directly or let Odysseus create them (we auto-inject in non–dry-run). The button above sends a
-            focused build task that only writes these files.
+            Use these files directly or let Odysseus create them. The button above sends a focused build task.
           </p>
           <ul className="mt-3 space-y-2">
             {Object.entries(scaffolds).map(([path, content]) => (
@@ -1010,7 +1137,10 @@ NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}</pre>
                     <button className="rounded border px-2 py-1 text-xs" onClick={() => copy(content)}>
                       Copy
                     </button>
-                    <button className="rounded border px-2 py-1 text-xs" onClick={() => downloadFile(path, content)}>
+                    <button
+                      className="rounded border px-2 py-1 text-xs"
+                      onClick={() => downloadFile(path, content)}
+                    >
                       Download
                     </button>
                   </div>
@@ -1020,8 +1150,6 @@ NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}</pre>
           </ul>
         </section>
       )}
-
-      <VercelPanel />
 
       <section className="rounded-2xl border p-4 shadow-sm md:p-5">
         <div className="mb-2 flex items-center justify-between">
@@ -1054,7 +1182,9 @@ NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}</pre>
                       <td className="px-2 py-2 align-top">{new Date(e.ts).toLocaleTimeString()}</td>
                       <td className="px-2 py-2 align-top">{e.event}</td>
                       <td className="px-2 py-2 align-top">
-                        <pre className="whitespace-pre-wrap text-xs">{JSON.stringify(e.props ?? {}, null, 2)}</pre>
+                        <pre className="whitespace-pre-wrap text-xs">
+                          {JSON.stringify(e.props ?? {}, null, 2)}
+                        </pre>
                       </td>
                     </tr>
                   ))}
@@ -1063,6 +1193,8 @@ NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}</pre>
           </div>
         )}
       </section>
+
+      <VercelPanel />
 
       {showPresetModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
