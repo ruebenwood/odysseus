@@ -1,6 +1,11 @@
 // Minimal client-side telemetry wrapper with PostHog (optional)
 "use client";
 
+export const ENV_POSTHOG_KEY =
+  process.env.NEXT_PUBLIC_POSTHOG_KEY || undefined;
+export const ENV_POSTHOG_HOST =
+  process.env.NEXT_PUBLIC_POSTHOG_HOST || "https://us.i.posthog.com";
+
 let posthogLoaded = false;
 let posthog: any = null;
 
@@ -10,18 +15,47 @@ type TelemetryConfig = {
   apiHost?: string;
 };
 
+type TelemetryEvent = {
+  ts: number;
+  event: string;
+  props?: Record<string, any>;
+};
+
+const MAX_EVENTS = 50;
+const recentEvents: TelemetryEvent[] = [];
+const listeners = new Set<(e: TelemetryEvent) => void>();
+
+function pushEvent(e: TelemetryEvent) {
+  recentEvents.push(e);
+  if (recentEvents.length > MAX_EVENTS) recentEvents.shift();
+  // Why: live-update UI even if PostHog disabled/missing key.
+  listeners.forEach((cb) => {
+    try {
+      cb(e);
+    } catch {
+      /* no-op */
+    }
+  });
+}
+
+export function subscribeToEvents(cb: (e: TelemetryEvent) => void) {
+  listeners.add(cb);
+  return () => listeners.delete(cb);
+}
+
+export function getRecentEvents(): TelemetryEvent[] {
+  return [...recentEvents];
+}
+
 export function initTelemetry(config: TelemetryConfig) {
-  // Why: avoid SSR/init costs when disabled or key missing.
   if (typeof window === "undefined") return;
   if (!config.enabled) return;
   if (posthogLoaded) return;
 
-  const key = config.key ?? process.env.NEXT_PUBLIC_POSTHOG_KEY;
-  const apiHost =
-    config.apiHost ?? process.env.NEXT_PUBLIC_POSTHOG_HOST ?? "https://us.i.posthog.com";
+  const key = config.key ?? ENV_POSTHOG_KEY;
+  const apiHost = config.apiHost ?? ENV_POSTHOG_HOST;
   if (!key) return;
 
-  // Lazy import; safe no-op if bundle missing.
   import("posthog-js")
     .then((mod) => {
       posthog = mod.default;
@@ -35,27 +69,29 @@ export function initTelemetry(config: TelemetryConfig) {
       posthogLoaded = true;
     })
     .catch(() => {
-      // Swallow; operate as no-op
+      // no-op
     });
 }
 
 export function capture(event: string, props?: Record<string, any>) {
+  const e: TelemetryEvent = { ts: Date.now(), event, props };
+  pushEvent(e);
   if (!posthogLoaded || !posthog) return;
   try {
     posthog.capture(event, props);
   } catch {
-    // no-op
+    /* no-op */
   }
 }
 
 export function shutdownTelemetry() {
-  if (!posthogLoaded || !posthog) return;
-  try {
-    posthog.shutdown();
-  } catch {
-    // no-op
-  } finally {
-    posthogLoaded = false;
-    posthog = null;
+  if (posthogLoaded && posthog) {
+    try {
+      posthog.shutdown();
+    } catch {
+      /* no-op */
+    }
   }
+  posthogLoaded = false;
+  posthog = null;
 }
