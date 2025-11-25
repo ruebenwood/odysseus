@@ -47,7 +47,7 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:3000/login, enter `ODYSSEUS_CONSOLE_PASSWORD`, and you will be redirected to `/odysseus` to send tasks. The console calls `/api/odysseus`, which forwards the request to your configured Codex bridge.
+Open http://localhost:3000/login and enter `ODYSSEUS_CONSOLE_PASSWORD` (defaults to `letmein` if unset) to reach `/odysseus`. The console calls `/api/odysseus`, which forwards the request to your configured Codex bridge.
 
 ## Environment variables
 
@@ -56,7 +56,7 @@ Open http://localhost:3000/login, enter `ODYSSEUS_CONSOLE_PASSWORD`, and you wil
 - `ODYSSEUS_LLM` — choose `bridge` (default) or `openai`.
 - `ODYSSEUS_CODEX_URL` — HTTP endpoint that executes Codex/LLM prompts when using the bridge.
 - `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL` — settings for the OpenAI backend.
-- `ODYSSEUS_CONSOLE_PASSWORD` — password for the console and API Bearer token.
+- `ODYSSEUS_CONSOLE_PASSWORD` — password for the console and API Bearer token (defaults to `letmein` if not set).
 - `ODYSSEUS_DB` — SQLite path for memory, todos, and automations.
 - `ODYSSEUS_MAX_STEPS` / `ODYSSEUS_TEMPERATURE` — planner behavior tuning.
 

@@ -24,9 +24,13 @@ export default function LoginPage({ searchParams }: PageProps) {
             type="password"
             name="password"
             className="border rounded p-2"
-            placeholder="••••••••"
+            placeholder="default: letmein"
             required
           />
+          <p className="text-xs text-neutral-600">
+            Default password is <code>letmein</code> unless you set
+            <code className="mx-1">ODYSSEUS_CONSOLE_PASSWORD</code>.
+          </p>
         </div>
         <button type="submit" className="w-full rounded px-4 py-2 border">
           Sign in
