@@ -54,7 +54,7 @@ Open http://localhost:3000/login and enter `ODYSSEUS_CONSOLE_PASSWORD` (defaults
 `.env.example` documents all supported settings, including:
 
 - `ODYSSEUS_LLM` — choose `bridge` (default) or `openai`.
-- `ODYSSEUS_CODEX_URL` — HTTP endpoint that executes Codex/LLM prompts when using the bridge.
+- `ODYSSEUS_CODEX_URL` — HTTP endpoint that executes Codex/LLM prompts when using the bridge. In development, if this is unset the bridge returns a stub string so the UI can render; set it before deploying.
 - `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL` — settings for the OpenAI backend.
 - `ODYSSEUS_CONSOLE_PASSWORD` — password for the console and API Bearer token (defaults to `letmein` if not set).
 - `ODYSSEUS_DB` — SQLite path for memory, todos, and automations.
