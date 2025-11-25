@@ -2,8 +2,6 @@
 "use client";
 
 import { useEffect, useMemo, useState, useTransition } from "react";
-import { runOdysseusTask, buildPrompt } from "@/lib/odysseus";
-import type { OdysseusMode } from "@/lib/odysseus";
 import {
   initTelemetry,
   capture,
@@ -18,6 +16,14 @@ import {
    ========================= */
 type RunState = { result?: string; error?: string; info?: string };
 type UIEvent = { ts: number; event: string; props?: Record<string, any> };
+type OdysseusMode =
+  | "build"
+  | "design"
+  | "refactor"
+  | "analyze"
+  | "deploy"
+  | "api"
+  | "mobile";
 
 type UIPreset = {
   id: string;
@@ -350,6 +356,57 @@ function parseRepoUrl(url: string): { owner?: string; repo?: string } {
   }
 }
 
+const BASE_ODYSSEUS_INSTRUCTIONS = `
+You are Odysseus.ai, an autonomous software architect, similar in spirit to an AI engineer like Lindy.
+
+Your mission:
+- Take high-level product requests and turn them into working code.
+- Plan briefly in your head, then ACT by editing the repo.
+- Work comfortably across web and mobile:
+  - For web apps, prefer Next.js + React (TypeScript) unless the repo clearly uses another stack.
+  - For mobile apps, prefer Expo + React Native (TypeScript).
+- When the user is asking for both web and mobile, prefer a monorepo layout:
+  - For example:
+    - apps/web (Next.js)
+    - apps/mobile (Expo)
+    - packages/* for shared logic, UI, or config.
+- Follow existing conventions in the project when they exist.
+- Write clean, modular, production-quality code with good naming and structure.
+- Be decisive and implementation-focused: the user wants you to BUILD, not just explain.
+`.trim();
+
+function buildPromptLocal(input: {
+  task: string;
+  mode: OdysseusMode;
+  extraInstructions?: string;
+}): string {
+  const instructions = [
+    BASE_ODYSSEUS_INSTRUCTIONS,
+    `Mode: ${input.mode.toUpperCase()}`,
+    `General behavior:
+- Use your tools (and connected services like Codex) to read and modify files directly.
+- Only ask the user follow-up questions if absolutely necessary.
+- At the end, output a concise summary:
+  - What you did
+  - Key files changed/added
+  - Any important TODOs or follow-ups.`,
+    input.extraInstructions?.trim(),
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+  return `
+${instructions}
+
+Current mode: ${input.mode.toUpperCase()}
+
+User request:
+${input.task}
+
+Act now in ${input.mode.toUpperCase()} mode.
+`.trim();
+}
+
 /* =========================
    Vercel Git steps generator
    ========================= */
@@ -543,7 +600,7 @@ export default function OdysseusPage() {
     setLastMode(modeVal);
 
     if (dryRun) {
-      const prompt = buildPrompt({ task: trimmed, mode: modeVal, extraInstructions: effectiveExtra });
+      const prompt = buildPromptLocal({ task: trimmed, mode: modeVal, extraInstructions: effectiveExtra });
       const preview = ["DRY RUN (no repo edits performed)", "", "––– Prompt that would be sent –––", prompt].join("\n");
       setState({ result: preview });
       capture("odysseus_dry_run", { mode: modeVal, presetId: presetId ?? null });
@@ -556,13 +613,6 @@ export default function OdysseusPage() {
       presetId: presetId ?? null,
       hasRepo: !!repoUrl.trim(),
     });
-
-    try {
-      const out = await runOdysseusTask(trimmed, { mode: modeVal, extraInstructions: effectiveExtra });
-      setState({ result: out });
-      capture("odysseus_run_success", { mode: modeVal, via: "server_action", presetId: presetId ?? null });
-      return;
-    } catch {}
 
     try {
       const res = await fetch("/api/odysseus", {
@@ -624,10 +674,18 @@ export default function OdysseusPage() {
       "- any commands to run (code block)",
     ].join("\n");
     try {
-      const out = await runOdysseusTask(trimmed, {
-        mode: "analyze",
-        extraInstructions: [composeRepoExtra(), planExtra].filter(Boolean).join("\n\n"),
+      const res = await fetch("/api/odysseus", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          task: trimmed,
+          mode: "analyze",
+          extraInstructions: [composeRepoExtra(), planExtra].filter(Boolean).join("\n\n"),
+        }),
       });
+      const data = (await res.json()) as { result?: string; error?: string };
+      if (!res.ok) throw new Error(data.error || "Plan failed");
+      const out = data.result ?? "";
       setState({ result: out });
       setLastPlanText(out);
       localStorage.setItem(LS_LAST_PLAN_KEY, out);

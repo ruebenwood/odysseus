@@ -1,3 +1,5 @@
+"use server";
+
 import { runCodexPrompt } from "./codexBridge";
 
 export type OdysseusMode =
@@ -148,7 +150,6 @@ export async function runOdysseusTask(
   task: string,
   opts?: RunOpts
 ): Promise<string> {
-  "use server";
   const mode = opts?.mode ?? "build";
   if (!task.trim()) throw new Error("Task cannot be empty.");
   const prompt = buildPrompt({
