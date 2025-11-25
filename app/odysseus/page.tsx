@@ -137,7 +137,7 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
 import { ConfigContext, ExpoConfig } from '@expo/config';
 export default ({ config }: ConfigContext): ExpoConfig => {
   const scheme = process.env.EXPO_PUBLIC_SCHEME || 'odysseus';
-  const links = (process.env.EXPO_PUBLIC_DEEP_LINKS || \`${scheme}://\`).split(',');
+  const links = (process.env.EXPO_PUBLIC_DEEP_LINKS || scheme + '://').split(',');
   return {
     ...config,
     name: 'Odysseus Mobile',
