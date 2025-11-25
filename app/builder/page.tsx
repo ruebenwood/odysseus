@@ -26,6 +26,110 @@ const platformsList = [
   { id: "game", label: "Game" },
 ];
 
+function renderPreviewContent(platform: string, lastUserMessage: string) {
+  const intentText =
+    lastUserMessage || "Your last command will appear here as the app intent.";
+
+  switch (platform) {
+    case "ios":
+    case "android":
+      return (
+        <div className="flex flex-1 flex-col gap-1.5">
+          <div className="rounded-lg bg-sky-500/20 px-2 py-1">
+            <p className="line-clamp-2 text-[9px] text-sky-100">{intentText}</p>
+          </div>
+
+          <div className="grid flex-1 grid-rows-3 gap-1.5">
+            <div className="rounded-md bg-white/10" />
+            <div className="rounded-md bg-white/10" />
+            <div className="flex gap-1.5">
+              <div className="flex-1 rounded-md bg-white/10" />
+              <div className="flex-1 rounded-md bg-white/10" />
+            </div>
+          </div>
+
+          <div className="mt-1 flex items-center justify-around rounded-xl bg-white/5 px-2 py-1">
+            <span className="h-2 w-6 rounded-full bg-slate-400/70" />
+            <span className="h-2 w-2 rounded-full bg-slate-500/80" />
+            <span className="h-2 w-2 rounded-full bg-slate-500/40" />
+            <span className="h-2 w-2 rounded-full bg-slate-500/40" />
+          </div>
+        </div>
+      );
+
+    case "smart-tv":
+      return (
+        <div className="flex flex-1 flex-col gap-1.5">
+          <div className="rounded-lg bg-sky-500/25 px-2 py-1">
+            <p className="line-clamp-1 text-[9px] text-sky-100">{intentText}</p>
+          </div>
+          <div className="grid flex-1 grid-rows-2 gap-1.5">
+            <div className="flex gap-1.5">
+              <div className="flex-[2] rounded-md bg-white/10" />
+              <div className="flex-1 rounded-md bg-white/10" />
+            </div>
+            <div className="grid grid-cols-3 gap-1.5">
+              <div className="rounded-md bg-white/10" />
+              <div className="rounded-md bg-white/10" />
+              <div className="rounded-md bg-white/10" />
+            </div>
+          </div>
+          <div className="mt-1 flex items-center justify-between rounded-xl bg-white/5 px-2 py-1">
+            <span className="h-2 w-10 rounded-full bg-slate-400/70" />
+            <span className="h-2 w-2 rounded-full bg-slate-500/80" />
+            <span className="h-2 w-2 rounded-full bg-slate-500/80" />
+          </div>
+        </div>
+      );
+
+    case "game":
+      return (
+        <div className="flex h-full flex-col gap-1.5">
+          <div className="flex items-center justify-between rounded-md bg-white/10 px-2 py-1">
+            <span className="text-[9px] text-slate-200">Score: 0000</span>
+            <span className="text-[9px] text-slate-400">Lives ●●●</span>
+          </div>
+          <div className="flex-1 rounded-md border border-sky-500/40 bg-black/60">
+            <div className="flex h-full items-center justify-center text-[9px] text-slate-500">
+              Game playfield based on:
+              <br />
+              <span className="line-clamp-2 text-[9px] text-sky-200">{intentText}</span>
+            </div>
+          </div>
+          <div className="mt-1 flex items-center justify-around rounded-md bg-white/5 px-2 py-1">
+            <span className="h-3 w-8 rounded bg-slate-500/70" />
+            <span className="h-3 w-3 rounded-full bg-slate-500/60" />
+            <span className="h-3 w-3 rounded-full bg-slate-500/40" />
+          </div>
+        </div>
+      );
+
+    case "web":
+    default:
+      return (
+        <div className="flex h-full flex-col gap-1.5">
+          <div className="flex items-center justify-between rounded-md bg-white/5 px-2 py-1">
+            <span className="h-2 w-10 rounded-full bg-slate-300/80" />
+            <span className="flex gap-1">
+              <span className="h-2 w-3 rounded-full bg-slate-500/60" />
+              <span className="h-2 w-3 rounded-full bg-slate-500/40" />
+            </span>
+          </div>
+          <div className="flex flex-1 gap-1.5">
+            <div className="flex-[3] rounded-md bg-sky-500/20 px-2 py-1">
+              <p className="line-clamp-3 text-[9px] text-sky-100">{intentText}</p>
+            </div>
+            <div className="flex-[2] space-y-1.5">
+              <div className="h-4 rounded-md bg-white/10" />
+              <div className="h-4 rounded-md bg-white/10" />
+              <div className="h-4 rounded-md bg-white/10" />
+            </div>
+          </div>
+        </div>
+      );
+  }
+}
+
 function formattedTime() {
   const d = new Date();
   return d.toTimeString().slice(0, 5);
@@ -394,44 +498,36 @@ export default function OdysseusBuilder() {
                 })}
               </div>
 
-              {/* Device frame */}
-              <div className="relative mx-auto aspect-[9/16] w-full max-w-[220px] rounded-[1.5rem] border border-white/15 bg-gradient-to-b from-slate-900 via-black to-black p-2 shadow-[0_0_40px_rgba(56,189,248,0.3)]">
-                {/* status bar notch */}
-                <div className="mx-auto mb-1 h-1 w-10 rounded-full bg-white/20" />
-                {/* top bar */}
-                <div className="mb-2 flex items-center justify-between rounded-xl bg-white/5 px-2 py-1">
-                  <span className="truncate text-[9px] text-slate-100">
-                    {previewLabel}
-                  </span>
-                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                </div>
+              {/* Device frame with platform-specific preview */}
+              {(() => {
+                const aspectClass =
+                  effectivePreviewPlatform === "ios" ||
+                  effectivePreviewPlatform === "android"
+                    ? "aspect-[9/16]"
+                    : "aspect-[16/9]";
 
-                {/* screen content */}
-                <div className="flex flex-1 flex-col gap-1.5">
-                  <div className="rounded-lg bg-sky-500/20 px-2 py-1">
-                    <p className="line-clamp-2 text-[9px] text-sky-100">
-                      {lastUserMessage
-                        ? lastUserMessage
-                        : "Your last command will appear here as the app intent."}
-                    </p>
-                  </div>
-                  <div className="grid flex-1 grid-rows-3 gap-1.5">
-                    <div className="rounded-md bg-white/5" />
-                    <div className="rounded-md bg-white/5" />
-                    <div className="flex gap-1.5">
-                      <div className="flex-1 rounded-md bg-white/5" />
-                      <div className="flex-1 rounded-md bg-white/5" />
+                return (
+                  <div
+                    className={`
+            relative mx-auto ${aspectClass} w-full
+            max-w-[230px] rounded-[1.5rem]
+            border border-white/15
+            bg-gradient-to-b from-slate-900 via-black to-black
+            p-2 shadow-[0_0_40px_rgba(56,189,248,0.3)]
+          `}
+                  >
+                    <div className="mx-auto mb-1 h-1 w-10 rounded-full bg-white/20" />
+                    <div className="mb-2 flex items-center justify-between rounded-xl bg-white/5 px-2 py-1">
+                      <span className="truncate text-[9px] text-slate-100">
+                        {previewLabel}
+                      </span>
+                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
                     </div>
+
+                    {renderPreviewContent(effectivePreviewPlatform, lastUserMessage)}
                   </div>
-                  {/* bottom nav / controls */}
-                  <div className="mt-1 flex items-center justify-around rounded-xl bg-white/5 px-2 py-1">
-                    <span className="h-2 w-6 rounded-full bg-slate-400/70" />
-                    <span className="h-2 w-2 rounded-full bg-slate-500/80" />
-                    <span className="h-2 w-2 rounded-full bg-slate-500/40" />
-                    <span className="h-2 w-2 rounded-full bg-slate-500/40" />
-                  </div>
-                </div>
-              </div>
+                );
+              })()}
 
               <p className="mt-2 text-[10px] text-slate-500">
                 This is a conceptual preview of layout and navigation. When

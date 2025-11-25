@@ -6,22 +6,23 @@
  * - Calling any internal tool that has repo access + LLM
  */
 export async function runCodexPrompt(prompt: string): Promise<string> {
-  const endpoint =
+  const CODEX_URL =
     process.env.ODYSSEUS_CODEX_URL || process.env.NEXT_PUBLIC_ODYSSEUS_CODEX_URL;
 
-  if (!endpoint) {
-    const message =
-      "ODYSSEUS_CODEX_URL is not set. Configure it to point at your Codex executor before deploying.";
-
-    // In development, fail softly so the UI can still render while surfacing the issue.
-    if (process.env.NODE_ENV !== "production") {
-      return `DEV STUB: ${message}\n\nPrompt preview:\n${prompt}`;
-    }
-
-    throw new Error(message);
+  if (!CODEX_URL && process.env.NODE_ENV === "production") {
+    throw new Error(
+      "ODYSSEUS_CODEX_URL is not set. Configure it to point at your Codex executor before deploying."
+    );
   }
 
-  const response = await fetch(endpoint, {
+  if (!CODEX_URL && process.env.NODE_ENV !== "production") {
+    console.warn(
+      "ODYSSEUS_CODEX_URL is not set – using mock responses in development."
+    );
+    return `DEV STUB: ODYSSEUS_CODEX_URL is not set. Configure it to point at your Codex executor before deploying.\n\nPrompt preview:\n${prompt}`;
+  }
+
+  const response = await fetch(CODEX_URL!, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
