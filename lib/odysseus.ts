@@ -1,7 +1,3 @@
-"use server";
-
-import { runCodexPrompt } from "./codexBridge";
-
 export type OdysseusMode =
   | "build"
   | "design"
@@ -11,7 +7,7 @@ export type OdysseusMode =
   | "api"
   | "mobile";
 
-type RunOpts = {
+export type RunOpts = {
   mode?: OdysseusMode;
   extraInstructions?: string;
 };
@@ -143,20 +139,4 @@ ${input.task}
 
 Act now in ${input.mode.toUpperCase()} mode.
 `.trim();
-}
-
-/** Server action (async) */
-export async function runOdysseusTask(
-  task: string,
-  opts?: RunOpts
-): Promise<string> {
-  const mode = opts?.mode ?? "build";
-  if (!task.trim()) throw new Error("Task cannot be empty.");
-  const prompt = buildPrompt({
-    task,
-    mode,
-    extraInstructions: opts?.extraInstructions,
-  });
-  const result = await runCodexPrompt(prompt);
-  return result;
 }

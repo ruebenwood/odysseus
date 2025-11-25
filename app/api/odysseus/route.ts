@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { runOdysseusTask } from "@/lib/odysseus";
+import { runOdysseusTaskServer } from "@/lib/odysseusServer";
 import type { OdysseusMode } from "@/lib/odysseus";
 
 export const runtime = "nodejs";
@@ -30,7 +30,7 @@ export async function POST(req: Request) {
       extra: !!extraInstructions,
     });
 
-    const result = await runOdysseusTask(task, { mode, extraInstructions });
+    const result = await runOdysseusTaskServer(task, { mode, extraInstructions });
     return NextResponse.json({ result });
   } catch (err: any) {
     // Why: ensure callers get a helpful message even on unexpected failures.
