@@ -790,52 +790,57 @@ export default function OdysseusPage() {
   }
 
   return (
-    <div className="mx-auto max-w-5xl p-6 space-y-8">
-      <header className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div className="space-y-1">
-          <h1 className="text-2xl font-semibold tracking-tight">Odysseus Presets</h1>
-          <p className="text-sm text-gray-500">
-            Lindy-style autonomous edits for Next.js + Expo. Build, refactor, deploy.
-          </p>
-        </div>
-        <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center">
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={dryRun}
-              onChange={(e) => {
-                setDryRun(e.target.checked);
-                try {
-                  localStorage.setItem(LS_DRYRUN_KEY, e.target.checked ? "1" : "0");
-                } catch {}
+    <div className="relative min-h-screen overflow-hidden bg-gradient-to-br from-[#070b16] via-[#0b1224] to-[#0d1b38] text-slate-100">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(124,58,237,0.18),transparent_34%),radial-gradient(circle_at_80%_0%,rgba(59,130,246,0.14),transparent_30%),radial-gradient(circle_at_50%_85%,rgba(45,212,191,0.15),transparent_26%)]" />
+      <div className="relative mx-auto max-w-6xl p-6 md:p-10 space-y-8">
+        <header className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="space-y-1">
+            <p className="inline-flex items-center gap-2 rounded-full bg-white/5 px-3 py-1 text-[11px] font-medium text-indigo-200 ring-1 ring-white/10">
+              Lindy-inspired AI engineer
+            </p>
+            <h1 className="text-3xl font-semibold tracking-tight md:text-4xl">Odysseus Presets</h1>
+            <p className="text-sm text-slate-300">
+              Build, refactor, and deploy like <span className="text-indigo-200">Lindy.ai</span>—Next.js + Expo, one console.
+            </p>
+          </div>
+          <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center">
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={dryRun}
+                onChange={(e) => {
+                  setDryRun(e.target.checked);
+                  try {
+                    localStorage.setItem(LS_DRYRUN_KEY, e.target.checked ? "1" : "0");
+                  } catch {}
+                }}
+              />
+              <span className="text-slate-200">Dry-run (no repo edits)</span>
+            </label>
+            <button
+              onClick={() => {
+                setEditing({ id: "", title: "", description: "", mode: "build", task: "", builtin: false });
+                setShowPresetModal(true);
               }}
-            />
-            <span className="text-gray-700">Dry-run (no repo edits)</span>
-          </label>
-          <button
-            onClick={() => {
-              setEditing({ id: "", title: "", description: "", mode: "build", task: "", builtin: false });
-              setShowPresetModal(true);
-            }}
-            className="rounded-md border px-3 py-1.5 text-sm"
-          >
-            Manage Presets
-          </button>
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={telemetryEnabled}
-              onChange={(e) => {
-                setTelemetryEnabled(e.target.checked);
-                try {
-                  localStorage.setItem(LS_TELEMETRY_KEY, e.target.checked ? "1" : "0");
-                } catch {}
-              }}
-            />
-            <span className="text-gray-600">Analytics (PostHog)</span>
-          </label>
-        </div>
-      </header>
+              className="rounded-md border border-white/15 px-3 py-1.5 text-sm text-slate-100 backdrop-blur hover:border-white/30"
+            >
+              Manage Presets
+            </button>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={telemetryEnabled}
+                onChange={(e) => {
+                  setTelemetryEnabled(e.target.checked);
+                  try {
+                    localStorage.setItem(LS_TELEMETRY_KEY, e.target.checked ? "1" : "0");
+                  } catch {}
+                }}
+              />
+              <span className="text-slate-200">Analytics (PostHog)</span>
+            </label>
+          </div>
+        </header>
 
       {missingKeyBanner && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
@@ -847,7 +852,7 @@ NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}</pre>
       )}
 
       {/* GitHub Repo Connect */}
-      <section className="rounded-2xl border p-4 shadow-sm md:p-5">
+      <section className="rounded-2xl border border-white/10 bg-white/5 p-4 shadow-xl shadow-indigo-900/25 backdrop-blur md:p-5">
         <h3 className="text-base font-medium">GitHub Repo Connect</h3>
         <div className="mt-3 grid gap-3">
           <input
@@ -934,7 +939,7 @@ NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}</pre>
       </section>
 
       {/* Custom task + Plan/Apply */}
-      <section className="rounded-2xl border p-4 shadow-sm md:p-5">
+      <section className="rounded-2xl border border-white/10 bg-white/5 p-4 shadow-xl shadow-indigo-900/25 backdrop-blur md:p-5">
         <h3 className="text-base font-medium">Custom task</h3>
         <div className="mt-3 grid gap-3">
           <textarea
@@ -1022,7 +1027,7 @@ NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}</pre>
       </section>
 
       {/* Output */}
-      <section className="rounded-2xl border p-4 shadow-sm md:p-5">
+      <section className="rounded-2xl border border-white/10 bg-white/5 p-4 shadow-xl shadow-indigo-900/25 backdrop-blur md:p-5">
         <div className="flex items-center justify-between">
           <h3 className="text-base font-medium">Output</h3>
           <div className="flex items-center gap-2">
@@ -1087,7 +1092,7 @@ NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}</pre>
 
       {/* Scaffolds panel */}
       {scaffolds && (
-        <section className="rounded-2xl border p-4 shadow-sm md:p-5">
+        <section className="rounded-2xl border border-white/10 bg-white/5 p-4 shadow-xl shadow-indigo-900/25 backdrop-blur md:p-5">
           <div className="mb-2 flex items-center justify-between">
             <h3 className="text-base font-medium">
               Scaffolds for{" "}
@@ -1161,7 +1166,7 @@ NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}</pre>
       )}
 
       {/* Macros */}
-      <section className="rounded-2xl border p-4 shadow-sm md:p-5">
+      <section className="rounded-2xl border border-white/10 bg-white/5 p-4 shadow-xl shadow-indigo-900/25 backdrop-blur md:p-5">
         <div className="mb-2 flex items-center justify-between">
           <h3 className="text-base font-medium">Macro presets (Plan → Apply)</h3>
           <span className="text-xs text-gray-500">Saved: {macros.length}</span>
@@ -1204,7 +1209,7 @@ NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}</pre>
       </section>
 
       {/* Events table */}
-      <section className="rounded-2xl border p-4 shadow-sm md:p-5">
+      <section className="rounded-2xl border border-white/10 bg-white/5 p-4 shadow-xl shadow-indigo-900/25 backdrop-blur md:p-5">
         <div className="mb-2 flex items-center justify-between">
           <h3 className="text-base font-medium">Recent analytics events</h3>
           <div className="flex items-center gap-2">
@@ -1352,6 +1357,7 @@ NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`}</pre>
           </div>
         </div>
       )}
+    </div>
     </div>
   );
 }
