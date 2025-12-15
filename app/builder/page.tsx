@@ -227,6 +227,11 @@ export default function OdysseusBuilder() {
     platformsList.find((p) => p.id === effectivePreviewPlatform)?.label ??
     effectivePreviewPlatform;
 
+  const previewAspectClass =
+    effectivePreviewPlatform === "ios" || effectivePreviewPlatform === "android"
+      ? "aspect-[9/16]"
+      : "aspect-[16/9]";
+
   return (
     <div className="flex min-h-screen flex-col bg-[#050509] text-slate-100">
       {/* Top bar */}
@@ -499,35 +504,17 @@ export default function OdysseusBuilder() {
               </div>
 
               {/* Device frame with platform-specific preview */}
-              {(() => {
-                const aspectClass =
-                  effectivePreviewPlatform === "ios" ||
-                  effectivePreviewPlatform === "android"
-                    ? "aspect-[9/16]"
-                    : "aspect-[16/9]";
+              <div
+                className={`relative mx-auto ${previewAspectClass} w-full max-w-[230px] rounded-[1.5rem] border border-white/15 bg-gradient-to-b from-slate-900 via-black to-black p-2 shadow-[0_0_40px_rgba(56,189,248,0.3)]`}
+              >
+                <div className="mx-auto mb-1 h-1 w-10 rounded-full bg-white/20" />
+                <div className="mb-2 flex items-center justify-between rounded-xl bg-white/5 px-2 py-1">
+                  <span className="truncate text-[9px] text-slate-100">{previewLabel}</span>
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                </div>
 
-                return (
-                  <div
-                    className={`
-            relative mx-auto ${aspectClass} w-full
-            max-w-[230px] rounded-[1.5rem]
-            border border-white/15
-            bg-gradient-to-b from-slate-900 via-black to-black
-            p-2 shadow-[0_0_40px_rgba(56,189,248,0.3)]
-          `}
-                  >
-                    <div className="mx-auto mb-1 h-1 w-10 rounded-full bg-white/20" />
-                    <div className="mb-2 flex items-center justify-between rounded-xl bg-white/5 px-2 py-1">
-                      <span className="truncate text-[9px] text-slate-100">
-                        {previewLabel}
-                      </span>
-                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                    </div>
-
-                    {renderPreviewContent(effectivePreviewPlatform, lastUserMessage)}
-                  </div>
-                );
-              })()}
+                {renderPreviewContent(effectivePreviewPlatform, lastUserMessage)}
+              </div>
 
               <p className="mt-2 text-[10px] text-slate-500">
                 This is a conceptual preview of layout and navigation. When

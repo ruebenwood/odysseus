@@ -5,20 +5,25 @@
  * - Spawning a `codex` CLI process
  * - Calling any internal tool that has repo access + LLM
  */
-export async function runCodexPrompt(prompt: string): Promise<string> {
-  const CODEX_URL =
-    process.env.ODYSSEUS_CODEX_URL || process.env.NEXT_PUBLIC_ODYSSEUS_CODEX_URL;
+const CODEX_URL =
+  process.env.ODYSSEUS_CODEX_URL || process.env.NEXT_PUBLIC_ODYSSEUS_CODEX_URL;
+const IS_PROD = process.env.NODE_ENV === "production";
+let devStubWarned = false;
 
-  if (!CODEX_URL && process.env.NODE_ENV === "production") {
+export async function runCodexPrompt(prompt: string): Promise<string> {
+  if (!CODEX_URL && IS_PROD) {
     throw new Error(
       "ODYSSEUS_CODEX_URL is not set. Configure it to point at your Codex executor before deploying."
     );
   }
 
-  if (!CODEX_URL && process.env.NODE_ENV !== "production") {
-    console.warn(
-      "ODYSSEUS_CODEX_URL is not set – using mock responses in development."
-    );
+  if (!CODEX_URL && !IS_PROD) {
+    if (!devStubWarned) {
+      console.warn(
+        "ODYSSEUS_CODEX_URL is not set – using mock responses in development."
+      );
+      devStubWarned = true;
+    }
     return `DEV STUB: ODYSSEUS_CODEX_URL is not set. Configure it to point at your Codex executor before deploying.\n\nPrompt preview:\n${prompt}`;
   }
 
