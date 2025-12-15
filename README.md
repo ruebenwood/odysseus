@@ -38,6 +38,29 @@ Authenticate requests with the `Bearer ${ODYSSEUS_CONSOLE_PASSWORD}` token. The 
 - `bridge` (default) posts to `ODYSSEUS_CODEX_URL`, expecting `{ messages, tools }` JSON and `{ text }` in response.
 - `openai` calls the chat completions API using `OPENAI_API_KEY`, `OPENAI_BASE_URL`, and `OPENAI_MODEL`, while keeping the same text contract for the planner.
 
+## App generator API (FastAPI entrypoint)
+
+For a standalone agent + project generator service (Vite React TS or Expo React Native TS), run the top-level `app.py`:
+
+```bash
+uvicorn app:api --reload
+```
+
+Endpoints:
+
+- `POST /interact` — run the planner with tool calls (web search/fetch, calendar, email, python sandbox, http client, project generate).
+- `POST /generate_project` — scaffold a project ZIP directly:
+
+  ```bash
+  curl -X POST http://127.0.0.1:8000/generate_project \
+    -H "Content-Type: application/json" \
+    -d '{"target":"web","app_name":"Trip Genie","prompt":"AI trip planner","pages":["Home","Plans"]}'
+  ```
+
+- `GET /download?path=...` — download generated ZIPs from `.agent_data/exports`.
+
+Projects are written under `.agent_data/projects/` and zipped into `.agent_data/exports/`. Set `OPENAI_API_KEY` to enable LLM calls; without it, the agent returns heuristic responses but tool outputs still work.
+
 ## Web console
 
 Install Node dependencies and run the Next.js app to use the password-protected console:
